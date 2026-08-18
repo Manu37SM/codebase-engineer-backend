@@ -1,0 +1,85 @@
+export interface TestCounts {
+  passed: number | null;
+  failed: number | null;
+  skipped: number | null;
+}
+
+const NO_COUNTS: TestCounts = { passed: null, failed: null, skipped: null };
+
+// eslint-disable-next-line no-control-regex
+const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
+
+/**
+ * Strips ANSI color/style escape codes. Vitest's default reporter colors
+ * its summary lines (e.g. the "Tests" label itself is wrapped in a dim
+ * code), which silently broke the original version of `parseVitestOutput`
+ * — a line-start regex anchored on "Tests" never matched because the line
+ * actually started with an escape sequence. Caught by dogfooding this
+ * parser against this project's own `npm test` output, not just a
+ * hand-written fixture string.
+ */
+function stripAnsi(text: string): string {
+  return text.replace(ANSI_ESCAPE_PATTERN, "");
+}
+
+/**
+ * Parses Vitest's default text-reporter summary, e.g.:
+ *   " Test Files  1 failed | 5 passed (6)"
+ *   "      Tests  1 failed | 21 passed (22)"
+ * We read the "Tests" line specifically (not "Test Files") since that's the
+ * individual-test count, not the file count. Returns null counts (not zeros)
+ * when the expected summary line isn't found — a missing line means "we
+ * don't actually know", which is a different, more honest, fact than "zero
+ * tests ran".
+ */
+export function parseVitestOutput(rawOutput: string): TestCounts {
+  const output = stripAnsi(rawOutput);
+  const line = output.split("\n").find((l) => /^\s*Tests\s+/.test(l));
+  if (!line) return NO_COUNTS;
+
+  const passed = matchCount(line, "passed");
+  const failed = matchCount(line, "failed");
+  const skipped = matchCount(line, "skipped");
+
+  if (passed === null && failed === null && skipped === null) return NO_COUNTS;
+  return { passed: passed ?? 0, failed: failed ?? 0, skipped: skipped ?? 0 };
+}
+
+/**
+ * Parses Maven Surefire's aggregate summary line, e.g.:
+ *   "Tests run: 12, Failures: 1, Errors: 0, Skipped: 2"
+ * Surefire prints one such line per module plus a final total; we sum every
+ * occurrence found (safe for both single-module and multi-module repos —
+ * intermediate per-module lines are a subset of, not a duplicate of, useful
+ * signal, and Maven doesn't print a distinct grand-total line in `-q` mode).
+ * "Errors" are counted as failures — both mean the test did not pass.
+ */
+export function parseMavenOutput(rawOutput: string): TestCounts {
+  const output = stripAnsi(rawOutput);
+  const pattern = /Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+),\s*Skipped:\s*(\d+)/g;
+  let match: RegExpExecArray | null;
+  let totalRun = 0;
+  let totalFailures = 0;
+  let totalErrors = 0;
+  let totalSkipped = 0;
+  let found = false;
+
+  while ((match = pattern.exec(output)) !== null) {
+    found = true;
+    totalRun += Number(match[1]);
+    totalFailures += Number(match[2]);
+    totalErrors += Number(match[3]);
+    totalSkipped += Number(match[4]);
+  }
+
+  if (!found) return NO_COUNTS;
+
+  const failed = totalFailures + totalErrors;
+  const passed = totalRun - failed - totalSkipped;
+  return { passed: Math.max(passed, 0), failed, skipped: totalSkipped };
+}
+
+function matchCount(line: string, label: string): number | null {
+  const match = line.match(new RegExp(`(\\d+)\\s+${label}\\b`));
+  return match ? Number(match[1]) : null;
+}

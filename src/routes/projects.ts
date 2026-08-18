@@ -1,0 +1,1332 @@
+import { randomUUID } from "node:crypto";
+import type { FastifyInstance } from "fastify";
+import type { DB } from "../db/index.js";
+import {
+  createProject,
+  getProjectById,
+  getProjectByRootPath,
+  listProjects,
+  saveDiscoverySnapshot,
+  getLatestSnapshot,
+} from "../db/projectRepo.js";
+import { assertValidProjectRoot, resolveWithinRoot, PathTraversalError } from "../security/paths.js";
+import { discoverRepository } from "../discovery/index.js";
+import { indexRepository } from "../indexer/index.js";
+import { replaceProjectFiles, listProjectFiles, listAllProjectFiles } from "../db/fileRepo.js";
+import { buildArchitectureView } from "../architecture/aggregate.js";
+import { runAnalysis } from "../analysis/index.js";
+import {
+  replaceProjectFindings,
+  listFindings,
+  createAnalysisRun,
+  finishAnalysisRun,
+  getLatestAnalysisRun,
+  getFindingById,
+} from "../db/findingRepo.js";
+import { analyzeGit } from "../git/index.js";
+import { runTests } from "../testrunner/run.js";
+import { saveTestRun, getTestRun, listTestRuns } from "../db/testRunRepo.js";
+import { scanSecurity } from "../security/scan.js";
+import { analyzeDependencies } from "../dependencies/index.js";
+import { buildAuditReport, buildAuditMarkdown } from "../audit/index.js";
+import { selectContextForFinding } from "../ai/context/select.js";
+import { explainFinding, EXPLAIN_FINDING_OPERATION_TYPE } from "../ai/workflows/explainFinding.js";
+import {
+  analyzeRootCause,
+  parseRootCauseSections,
+  ROOT_CAUSE_ANALYSIS_OPERATION_TYPE,
+} from "../ai/workflows/rootCauseAnalysis.js";
+import { planFix, parseFixPlanSections, FIX_PLAN_OPERATION_TYPE } from "../ai/workflows/fixPlan.js";
+import { generatePatch } from "../ai/workflows/generatePatch.js";
+import { applyPatchToDisk } from "../patch/applyPatch.js";
+import {
+  createPatch,
+  createPatchReview,
+  getPatchById,
+  listPatchesForFinding,
+  setPatchApplyResult,
+  setPatchDiff,
+  updatePatchStatus,
+} from "../db/patchRepo.js";
+import { getLatestSuccessfulResponse } from "../db/aiRequestRepo.js";
+import { getProviderConfigById, listProviderConfigs, type ProviderConfigRecord } from "../db/aiProviderRepo.js";
+import { AIProviderError } from "../ai/provider/types.js";
+import { generateTest } from "../ai/workflows/generateTest.js";
+import {
+  createGeneratedTest,
+  createGeneratedTestReview,
+  getGeneratedTestById,
+  listGeneratedTestsForFinding,
+  setGeneratedTestContent,
+  setGeneratedTestRunResult,
+  updateGeneratedTestStatus,
+} from "../db/generatedTestRepo.js";
+import fs from "node:fs";
+import path from "node:path";
+
+interface RegisterProjectsRoutesOptions {
+  db: DB;
+}
+
+/**
+ * Resolves which enabled provider a Finding-target AI workflow route
+ * should use — either the one named by `providerId`, or the first enabled
+ * one if none was specified — with the same honest 400 messages every
+ * such route needs. Shared by `/explain` and `/root-cause` (Phase 14/15)
+ * rather than duplicated per route.
+ */
+function resolveEnabledProvider(
+  db: DB,
+  body: { providerId?: string } | undefined
+): { provider: ProviderConfigRecord } | { error: { status: number; message: string } } {
+  const providerRecord = body?.providerId
+    ? getProviderConfigById(db, body.providerId)
+    : listProviderConfigs(db).find((p) => p.enabled === 1);
+
+  if (!providerRecord) {
+    return {
+      error: {
+        status: 400,
+        message: body?.providerId
+          ? "The requested AI provider was not found."
+          : "No AI provider is configured and enabled. Configure one in AI Mode first.",
+      },
+    };
+  }
+  if (providerRecord.enabled !== 1) {
+    return { error: { status: 400, message: `Provider "${providerRecord.name}" is not enabled.` } };
+  }
+  return { provider: providerRecord };
+}
+
+export function registerProjectsRoutes(
+  app: FastifyInstance,
+  { db }: RegisterProjectsRoutesOptions
+) {
+  app.post("/api/v1/projects", async (request, reply) => {
+    const body = request.body as { name?: string; rootPath?: string } | undefined;
+    if (!body?.name || !body?.rootPath) {
+      return reply.status(400).send({ error: "name and rootPath are required" });
+    }
+
+    try {
+      assertValidProjectRoot(body.rootPath);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+
+    const existing = getProjectByRootPath(db, body.rootPath);
+    if (existing) {
+      return reply.status(409).send({
+        error: "A project is already registered for this root path",
+        project: existing,
+      });
+    }
+
+    const project = createProject(db, randomUUID(), body.name, body.rootPath);
+    return reply.status(201).send({ project });
+  });
+
+  app.get("/api/v1/projects", async () => {
+    return { projects: listProjects(db) };
+  });
+
+  app.get("/api/v1/projects/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+    const latestSnapshot = getLatestSnapshot(db, id);
+    return { project, latestSnapshot: latestSnapshot ?? null };
+  });
+
+  app.post("/api/v1/projects/:id/discover", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    let result;
+    try {
+      result = discoverRepository(project.root_path);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+
+    const snapshot = saveDiscoverySnapshot(db, randomUUID(), id, result);
+    return reply.status(200).send({ snapshot, result });
+  });
+
+  app.post("/api/v1/projects/:id/index", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    let result;
+    try {
+      result = indexRepository(project.root_path);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+
+    replaceProjectFiles(db, id, result.files, randomUUID);
+
+    return reply.status(200).send({
+      totalFiles: result.totalFiles,
+      testFiles: result.testFiles,
+      generatedFiles: result.generatedFiles,
+      indexedAt: result.indexedAt,
+    });
+  });
+
+  app.get("/api/v1/projects/:id/files", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const query = request.query as {
+      language?: string;
+      isTest?: string;
+      limit?: string;
+      offset?: string;
+    };
+
+    const { files, total } = listProjectFiles(db, id, {
+      language: query.language,
+      isTest: query.isTest !== undefined ? query.isTest === "true" : undefined,
+      limit: query.limit ? Number(query.limit) : undefined,
+      offset: query.offset ? Number(query.offset) : undefined,
+    });
+
+    return reply.status(200).send({
+      files: files.map((f) => ({ ...f, imports: f.imports ? JSON.parse(f.imports) : [] })),
+      total,
+    });
+  });
+
+  app.get("/api/v1/projects/:id/architecture", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const query = request.query as { depth?: string };
+    const depth = query.depth ? Number(query.depth) : 2;
+    if (!Number.isFinite(depth) || depth < 1) {
+      return reply.status(400).send({ error: "depth must be a positive integer" });
+    }
+
+    const records = listAllProjectFiles(db, id);
+    if (records.length === 0) {
+      return reply.status(200).send({
+        depth,
+        nodes: [],
+        edges: [],
+        externalDependencies: [],
+        generatedAt: new Date().toISOString(),
+        empty: true,
+      });
+    }
+
+    const view = buildArchitectureView(
+      records.map((r) => ({
+        relativePath: r.relative_path,
+        language: r.language,
+        loc: r.loc,
+        isTest: r.is_test === 1,
+        imports: r.imports ? JSON.parse(r.imports) : [],
+      })),
+      depth
+    );
+
+    return reply.status(200).send({ ...view, empty: false });
+  });
+
+  app.post("/api/v1/projects/:id/analysis", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const runId = randomUUID();
+    const run = createAnalysisRun(db, runId, id);
+
+    let result;
+    try {
+      result = runAnalysis(project.root_path);
+    } catch (err) {
+      finishAnalysisRun(db, runId, "failed", 0);
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+
+    replaceProjectFindings(db, id, result.findings, randomUUID);
+    finishAnalysisRun(db, runId, "completed", result.findings.length);
+
+    return reply.status(200).send({
+      run: { ...run, status: "completed", findings_count: result.findings.length },
+      findingsCount: result.findings.length,
+      startedAt: result.startedAt,
+      finishedAt: result.finishedAt,
+    });
+  });
+
+  app.get("/api/v1/projects/:id/findings", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const query = request.query as {
+      severity?: string;
+      category?: string;
+      limit?: string;
+      offset?: string;
+    };
+
+    const { findings, total } = listFindings(db, id, {
+      severity: query.severity,
+      category: query.category,
+      limit: query.limit ? Number(query.limit) : undefined,
+      offset: query.offset ? Number(query.offset) : undefined,
+    });
+
+    const latestRun = getLatestAnalysisRun(db, id);
+
+    return reply.status(200).send({ findings, total, latestRun: latestRun ?? null });
+  });
+
+  const DEFAULT_CONTEXT_BUDGET_TOKENS = 4000;
+
+  app.get("/api/v1/projects/:id/findings/:findingId/context", async (request, reply) => {
+    const { id, findingId } = request.params as { id: string; findingId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const finding = getFindingById(db, findingId);
+    if (!finding || finding.project_id !== id) {
+      return reply.status(404).send({ error: "Finding not found" });
+    }
+
+    const query = request.query as { budgetTokens?: string };
+    const budgetTokens = query.budgetTokens ? Number(query.budgetTokens) : DEFAULT_CONTEXT_BUDGET_TOKENS;
+    if (!Number.isFinite(budgetTokens) || budgetTokens < 1) {
+      return reply.status(400).send({ error: "budgetTokens must be a positive integer" });
+    }
+
+    const files = listAllProjectFiles(db, id).map((f) => ({
+      relativePath: f.relative_path,
+      language: f.language,
+      imports: f.imports ? (JSON.parse(f.imports) as string[]) : [],
+      isTest: f.is_test === 1,
+    }));
+
+    const bundle = selectContextForFinding({
+      root: project.root_path,
+      finding: {
+        id: finding.id,
+        filePath: finding.file_path ?? "",
+        lineStart: finding.line_start,
+        lineEnd: finding.line_end,
+      },
+      files,
+      budgetTokens,
+    });
+
+    return reply.status(200).send(bundle);
+  });
+
+  /**
+   * Returns the most recent successful AI explanation on file for a finding,
+   * if any — a read-only lookup that never calls a provider or spends
+   * tokens, so the Findings page can show a previously-generated
+   * explanation without re-requesting it.
+   */
+  app.get("/api/v1/projects/:id/findings/:findingId/explanation", async (request, reply) => {
+    const { id, findingId } = request.params as { id: string; findingId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const finding = getFindingById(db, findingId);
+    if (!finding || finding.project_id !== id) {
+      return reply.status(404).send({ error: "Finding not found" });
+    }
+
+    const response = getLatestSuccessfulResponse(db, findingId, EXPLAIN_FINDING_OPERATION_TYPE);
+    if (!response) {
+      return reply.status(200).send({ explanation: null });
+    }
+    return reply.status(200).send({
+      explanation: response.content,
+      provider: response.provider,
+      model: response.model,
+      generatedAt: response.requestCreatedAt,
+    });
+  });
+
+  /**
+   * Phase 14's first real AI call: builds a Phase 13 context bundle for the
+   * finding and asks the configured provider to explain it (why it matters,
+   * likely cause). This is the only route in the product so far that
+   * spends real tokens against a real provider — it only runs on an
+   * explicit POST from the UI, never automatically, per docs/AI_MODE.md §1's
+   * "no AI action auto-executes" rule. Read-only: never writes to the
+   * finding or applies anything.
+   */
+  app.post("/api/v1/projects/:id/findings/:findingId/explain", async (request, reply) => {
+    const { id, findingId } = request.params as { id: string; findingId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const finding = getFindingById(db, findingId);
+    if (!finding || finding.project_id !== id) {
+      return reply.status(404).send({ error: "Finding not found" });
+    }
+
+    const body = request.body as { providerId?: string; budgetTokens?: number } | undefined;
+
+    const resolved = resolveEnabledProvider(db, body);
+    if ("error" in resolved) {
+      return reply.status(resolved.error.status).send({ error: resolved.error.message });
+    }
+    const providerRecord = resolved.provider;
+
+    if (body?.budgetTokens !== undefined && (!Number.isFinite(body.budgetTokens) || body.budgetTokens < 1)) {
+      return reply.status(400).send({ error: "budgetTokens must be a positive integer" });
+    }
+
+    const files = listAllProjectFiles(db, id).map((f) => ({
+      relativePath: f.relative_path,
+      language: f.language,
+      imports: f.imports ? (JSON.parse(f.imports) as string[]) : [],
+      isTest: f.is_test === 1,
+    }));
+
+    try {
+      const result = await explainFinding({
+        db,
+        projectId: id,
+        projectRoot: project.root_path,
+        finding,
+        files,
+        providerConfig: {
+          id: providerRecord.id,
+          name: providerRecord.name,
+          kind: providerRecord.kind,
+          baseUrl: providerRecord.base_url,
+          model: providerRecord.model,
+          apiKey: providerRecord.api_key,
+        },
+        budgetTokens: body?.budgetTokens,
+      });
+
+      return reply.status(200).send({
+        explanation: result.explanation,
+        provider: result.provider,
+        model: result.model,
+        usage: result.usage,
+        contextBundle: result.bundle,
+      });
+    } catch (err) {
+      if (err instanceof AIProviderError) {
+        const status = err.kind === "auth_error" ? 401 : err.kind === "rate_limited" ? 429 : 502;
+        return reply.status(status).send({ error: err.message, kind: err.kind });
+      }
+      return reply.status(502).send({ error: err instanceof Error ? err.message : "AI provider request failed." });
+    }
+  });
+
+  /**
+   * Read-only lookup of the most recent successful root-cause analysis on
+   * file for a finding — reparses the stored raw response into
+   * evidence/inference/confidence on every fetch (rather than persisting
+   * the parsed shape) so a change to `parseRootCauseSections` benefits
+   * old rows automatically, and never calls a provider.
+   */
+  app.get("/api/v1/projects/:id/findings/:findingId/root-cause", async (request, reply) => {
+    const { id, findingId } = request.params as { id: string; findingId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const finding = getFindingById(db, findingId);
+    if (!finding || finding.project_id !== id) {
+      return reply.status(404).send({ error: "Finding not found" });
+    }
+
+    const response = getLatestSuccessfulResponse(db, findingId, ROOT_CAUSE_ANALYSIS_OPERATION_TYPE);
+    if (!response) {
+      return reply.status(200).send({ analysis: null });
+    }
+    return reply.status(200).send({
+      analysis: parseRootCauseSections(response.content ?? ""),
+      provider: response.provider,
+      model: response.model,
+      generatedAt: response.requestCreatedAt,
+    });
+  });
+
+  /**
+   * Phase 15's AI call: builds a Phase 13 context bundle for the finding
+   * and asks the configured provider to separate evidence from inference
+   * (docs/AI_MODE.md §4's "Root Cause Analysis" workflow step) — like
+   * `/explain`, only runs on an explicit POST, never automatically.
+   * Read-only: never writes to the finding or applies anything.
+   */
+  app.post("/api/v1/projects/:id/findings/:findingId/root-cause", async (request, reply) => {
+    const { id, findingId } = request.params as { id: string; findingId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const finding = getFindingById(db, findingId);
+    if (!finding || finding.project_id !== id) {
+      return reply.status(404).send({ error: "Finding not found" });
+    }
+
+    const body = request.body as { providerId?: string; budgetTokens?: number } | undefined;
+
+    const resolved = resolveEnabledProvider(db, body);
+    if ("error" in resolved) {
+      return reply.status(resolved.error.status).send({ error: resolved.error.message });
+    }
+    const providerRecord = resolved.provider;
+
+    if (body?.budgetTokens !== undefined && (!Number.isFinite(body.budgetTokens) || body.budgetTokens < 1)) {
+      return reply.status(400).send({ error: "budgetTokens must be a positive integer" });
+    }
+
+    const files = listAllProjectFiles(db, id).map((f) => ({
+      relativePath: f.relative_path,
+      language: f.language,
+      imports: f.imports ? (JSON.parse(f.imports) as string[]) : [],
+      isTest: f.is_test === 1,
+    }));
+
+    try {
+      const result = await analyzeRootCause({
+        db,
+        projectId: id,
+        projectRoot: project.root_path,
+        finding,
+        files,
+        providerConfig: {
+          id: providerRecord.id,
+          name: providerRecord.name,
+          kind: providerRecord.kind,
+          baseUrl: providerRecord.base_url,
+          model: providerRecord.model,
+          apiKey: providerRecord.api_key,
+        },
+        budgetTokens: body?.budgetTokens,
+      });
+
+      return reply.status(200).send({
+        analysis: result.analysis,
+        provider: result.provider,
+        model: result.model,
+        usage: result.usage,
+        contextBundle: result.bundle,
+      });
+    } catch (err) {
+      if (err instanceof AIProviderError) {
+        const status = err.kind === "auth_error" ? 401 : err.kind === "rate_limited" ? 429 : 502;
+        return reply.status(status).send({ error: err.message, kind: err.kind });
+      }
+      return reply.status(502).send({ error: err instanceof Error ? err.message : "AI provider request failed." });
+    }
+  });
+
+  /**
+   * Read-only lookup of the most recent successful fix plan on file for a
+   * finding — like `/root-cause`, reparses the stored raw response into
+   * its seven sections on every fetch rather than persisting the parsed
+   * shape, and never calls a provider.
+   */
+  app.get("/api/v1/projects/:id/findings/:findingId/fix-plan", async (request, reply) => {
+    const { id, findingId } = request.params as { id: string; findingId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const finding = getFindingById(db, findingId);
+    if (!finding || finding.project_id !== id) {
+      return reply.status(404).send({ error: "Finding not found" });
+    }
+
+    const response = getLatestSuccessfulResponse(db, findingId, FIX_PLAN_OPERATION_TYPE);
+    if (!response) {
+      return reply.status(200).send({ plan: null });
+    }
+    return reply.status(200).send({
+      plan: parseFixPlanSections(response.content ?? ""),
+      provider: response.provider,
+      model: response.model,
+      generatedAt: response.requestCreatedAt,
+    });
+  });
+
+  /**
+   * Phase 16's AI call: builds the seven-section fix plan docs/AI_MODE.md
+   * §5 defines, folding in a prior Phase 15 root-cause analysis for this
+   * finding as grounding when one exists. Like `/explain` and
+   * `/root-cause`, only runs on an explicit POST, never automatically.
+   * Strictly advisory: this produces words describing a proposed change,
+   * never a diff and never anything applied to disk — patch generation
+   * (Phase 17) is a separate, later, human-approval-gated workflow.
+   */
+  app.post("/api/v1/projects/:id/findings/:findingId/fix-plan", async (request, reply) => {
+    const { id, findingId } = request.params as { id: string; findingId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const finding = getFindingById(db, findingId);
+    if (!finding || finding.project_id !== id) {
+      return reply.status(404).send({ error: "Finding not found" });
+    }
+
+    const body = request.body as { providerId?: string; budgetTokens?: number } | undefined;
+
+    const resolved = resolveEnabledProvider(db, body);
+    if ("error" in resolved) {
+      return reply.status(resolved.error.status).send({ error: resolved.error.message });
+    }
+    const providerRecord = resolved.provider;
+
+    if (body?.budgetTokens !== undefined && (!Number.isFinite(body.budgetTokens) || body.budgetTokens < 1)) {
+      return reply.status(400).send({ error: "budgetTokens must be a positive integer" });
+    }
+
+    const files = listAllProjectFiles(db, id).map((f) => ({
+      relativePath: f.relative_path,
+      language: f.language,
+      imports: f.imports ? (JSON.parse(f.imports) as string[]) : [],
+      isTest: f.is_test === 1,
+    }));
+
+    try {
+      const result = await planFix({
+        db,
+        projectId: id,
+        projectRoot: project.root_path,
+        finding,
+        files,
+        providerConfig: {
+          id: providerRecord.id,
+          name: providerRecord.name,
+          kind: providerRecord.kind,
+          baseUrl: providerRecord.base_url,
+          model: providerRecord.model,
+          apiKey: providerRecord.api_key,
+        },
+        budgetTokens: body?.budgetTokens,
+      });
+
+      return reply.status(200).send({
+        plan: result.plan,
+        usedPriorRootCauseAnalysis: result.usedPriorRootCauseAnalysis,
+        provider: result.provider,
+        model: result.model,
+        usage: result.usage,
+        contextBundle: result.bundle,
+      });
+    } catch (err) {
+      if (err instanceof AIProviderError) {
+        const status = err.kind === "auth_error" ? 401 : err.kind === "rate_limited" ? 429 : 502;
+        return reply.status(status).send({ error: err.message, kind: err.kind });
+      }
+      return reply.status(502).send({ error: err instanceof Error ? err.message : "AI provider request failed." });
+    }
+  });
+
+  // --- Phase 17: patch generation (diff, human-approved) -------------------
+  //
+  // The first phase to produce anything that could eventually change a file
+  // on disk — so, unlike /explain, /root-cause, and /fix-plan, this isn't a
+  // single request/response call. It's a real, persisted state machine
+  // (backend/src/db/patchRepo.ts) enforcing docs/AI_MODE.md §4's first
+  // human-approval gate ("Human Approval → Patch Generation") server-side:
+  // a patch is created in 'pending_approval' with no diff yet, must be
+  // explicitly approved via its own request before /generate will do
+  // anything, and /generate itself never writes to any file — it only ever
+  // updates the patch row's diff_text and status. Applying an approved,
+  // reviewed diff to disk is Phase 18, below.
+
+  /** Creates a patch registration (no diff yet) for a finding that already has a fix plan. */
+  app.post("/api/v1/projects/:id/findings/:findingId/patches", async (request, reply) => {
+    const { id, findingId } = request.params as { id: string; findingId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const finding = getFindingById(db, findingId);
+    if (!finding || finding.project_id !== id) {
+      return reply.status(404).send({ error: "Finding not found" });
+    }
+
+    const fixPlanResponse = getLatestSuccessfulResponse(db, findingId, FIX_PLAN_OPERATION_TYPE);
+    if (!fixPlanResponse) {
+      return reply.status(400).send({ error: "Generate a fix plan for this finding first." });
+    }
+
+    const body = request.body as { description?: string } | undefined;
+    const description = body?.description ?? parseFixPlanSections(fixPlanResponse.content ?? "").problem;
+
+    const patch = createPatch(db, randomUUID(), { projectId: id, findingId, description: description ?? null });
+    return reply.status(201).send({ patch });
+  });
+
+  app.get("/api/v1/projects/:id/findings/:findingId/patches", async (request, reply) => {
+    const { id, findingId } = request.params as { id: string; findingId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const finding = getFindingById(db, findingId);
+    if (!finding || finding.project_id !== id) {
+      return reply.status(404).send({ error: "Finding not found" });
+    }
+
+    return reply.status(200).send({ patches: listPatchesForFinding(db, findingId) });
+  });
+
+  app.get("/api/v1/projects/:id/patches/:patchId", async (request, reply) => {
+    const { id, patchId } = request.params as { id: string; patchId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const patch = getPatchById(db, patchId);
+    if (!patch || patch.project_id !== id) {
+      return reply.status(404).send({ error: "Patch not found" });
+    }
+
+    return reply.status(200).send({ patch });
+  });
+
+  /** The first human-approval gate: a patch must be approved here before /generate will act on it. */
+  app.post("/api/v1/projects/:id/patches/:patchId/approve", async (request, reply) => {
+    const { id, patchId } = request.params as { id: string; patchId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const patch = getPatchById(db, patchId);
+    if (!patch || patch.project_id !== id) {
+      return reply.status(404).send({ error: "Patch not found" });
+    }
+    if (patch.status !== "pending_approval") {
+      return reply.status(400).send({ error: `Patch is "${patch.status}", not "pending_approval" — cannot approve.` });
+    }
+
+    const body = request.body as { reviewerNote?: string } | undefined;
+    createPatchReview(db, randomUUID(), {
+      patchId,
+      decision: "approved_for_generation",
+      reviewerNote: body?.reviewerNote ?? null,
+    });
+    updatePatchStatus(db, patchId, "approved");
+
+    return reply.status(200).send({ patch: getPatchById(db, patchId) });
+  });
+
+  app.post("/api/v1/projects/:id/patches/:patchId/reject", async (request, reply) => {
+    const { id, patchId } = request.params as { id: string; patchId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const patch = getPatchById(db, patchId);
+    if (!patch || patch.project_id !== id) {
+      return reply.status(404).send({ error: "Patch not found" });
+    }
+    if (patch.status !== "pending_approval") {
+      return reply.status(400).send({ error: `Patch is "${patch.status}", not "pending_approval" — cannot reject.` });
+    }
+
+    const body = request.body as { reviewerNote?: string } | undefined;
+    createPatchReview(db, randomUUID(), {
+      patchId,
+      decision: "rejected_before_generation",
+      reviewerNote: body?.reviewerNote ?? null,
+    });
+    updatePatchStatus(db, patchId, "rejected");
+
+    return reply.status(200).send({ patch: getPatchById(db, patchId) });
+  });
+
+  /**
+   * The only route that actually calls a provider to produce diff text —
+   * requires the patch to already be 'approved' (checked against the
+   * persisted state, not a request flag), so a client cannot skip the
+   * approval step by omitting it from this call's body.
+   */
+  app.post("/api/v1/projects/:id/patches/:patchId/generate", async (request, reply) => {
+    const { id, patchId } = request.params as { id: string; patchId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const patch = getPatchById(db, patchId);
+    if (!patch || patch.project_id !== id) {
+      return reply.status(404).send({ error: "Patch not found" });
+    }
+    if (patch.status !== "approved") {
+      return reply.status(400).send({
+        error: `Patch is "${patch.status}", not "approved" — approve it first via POST .../approve before generating.`,
+      });
+    }
+    if (!patch.finding_id) {
+      return reply.status(400).send({ error: "Patch has no associated finding." });
+    }
+    const finding = getFindingById(db, patch.finding_id);
+    if (!finding) {
+      return reply.status(404).send({ error: "The patch's finding no longer exists." });
+    }
+
+    const body = request.body as { providerId?: string; budgetTokens?: number } | undefined;
+
+    const resolved = resolveEnabledProvider(db, body);
+    if ("error" in resolved) {
+      return reply.status(resolved.error.status).send({ error: resolved.error.message });
+    }
+    const providerRecord = resolved.provider;
+
+    if (body?.budgetTokens !== undefined && (!Number.isFinite(body.budgetTokens) || body.budgetTokens < 1)) {
+      return reply.status(400).send({ error: "budgetTokens must be a positive integer" });
+    }
+
+    const files = listAllProjectFiles(db, id).map((f) => ({
+      relativePath: f.relative_path,
+      language: f.language,
+      imports: f.imports ? (JSON.parse(f.imports) as string[]) : [],
+      isTest: f.is_test === 1,
+    }));
+
+    try {
+      const result = await generatePatch({
+        db,
+        projectId: id,
+        projectRoot: project.root_path,
+        finding,
+        files,
+        providerConfig: {
+          id: providerRecord.id,
+          name: providerRecord.name,
+          kind: providerRecord.kind,
+          baseUrl: providerRecord.base_url,
+          model: providerRecord.model,
+          apiKey: providerRecord.api_key,
+        },
+        budgetTokens: body?.budgetTokens,
+      });
+
+      setPatchDiff(db, patchId, result.diffText, "proposed");
+
+      return reply.status(200).send({
+        patch: getPatchById(db, patchId),
+        usedFixPlan: result.usedFixPlan,
+        provider: result.provider,
+        model: result.model,
+        usage: result.usage,
+        contextBundle: result.bundle,
+      });
+    } catch (err) {
+      if (err instanceof AIProviderError) {
+        const status = err.kind === "auth_error" ? 401 : err.kind === "rate_limited" ? 429 : 502;
+        return reply.status(status).send({ error: err.message, kind: err.kind });
+      }
+      return reply.status(502).send({ error: err instanceof Error ? err.message : "AI provider request failed." });
+    }
+  });
+
+  // --- Phase 18: diff review, second human-approval gate, and apply --------
+  //
+  // docs/AI_MODE.md §4's second gate: "Diff Review → Human Approval →
+  // Apply Patch". A 'proposed' patch (has a real diff, from Phase 17) must
+  // be explicitly approved again — reviewing the diff is a separate
+  // decision from approving that generation should happen at all — before
+  // /apply will touch any file. /apply is the first route in this product
+  // that writes to disk: it always runs a real `git apply --check` dry run
+  // first (backend/src/patch/applyPatch.ts) and only performs the real
+  // write if that dry run succeeds, so a diff that no longer applies
+  // cleanly (e.g. the file changed since generation) fails loudly with the
+  // real `git apply` error rather than partially writing or guessing.
+
+  /** The second human-approval gate: a diff must be approved here before /apply will act on it. */
+  app.post("/api/v1/projects/:id/patches/:patchId/approve-apply", async (request, reply) => {
+    const { id, patchId } = request.params as { id: string; patchId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const patch = getPatchById(db, patchId);
+    if (!patch || patch.project_id !== id) {
+      return reply.status(404).send({ error: "Patch not found" });
+    }
+    if (patch.status !== "proposed") {
+      return reply.status(400).send({ error: `Patch is "${patch.status}", not "proposed" — cannot approve for apply.` });
+    }
+
+    const body = request.body as { reviewerNote?: string } | undefined;
+    createPatchReview(db, randomUUID(), {
+      patchId,
+      decision: "approved_for_apply",
+      reviewerNote: body?.reviewerNote ?? null,
+    });
+    updatePatchStatus(db, patchId, "approved_for_apply");
+
+    return reply.status(200).send({ patch: getPatchById(db, patchId) });
+  });
+
+  app.post("/api/v1/projects/:id/patches/:patchId/reject-apply", async (request, reply) => {
+    const { id, patchId } = request.params as { id: string; patchId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const patch = getPatchById(db, patchId);
+    if (!patch || patch.project_id !== id) {
+      return reply.status(404).send({ error: "Patch not found" });
+    }
+    if (patch.status !== "proposed") {
+      return reply.status(400).send({ error: `Patch is "${patch.status}", not "proposed" — cannot reject.` });
+    }
+
+    const body = request.body as { reviewerNote?: string } | undefined;
+    createPatchReview(db, randomUUID(), {
+      patchId,
+      decision: "rejected_after_review",
+      reviewerNote: body?.reviewerNote ?? null,
+    });
+    updatePatchStatus(db, patchId, "rejected");
+
+    return reply.status(200).send({ patch: getPatchById(db, patchId) });
+  });
+
+  /**
+   * The only route in this product that writes to a file on disk. Requires
+   * the patch to already be 'approved_for_apply' (checked against the
+   * persisted state) — or 'failed', so a mechanical apply failure (e.g.
+   * transient drift) can be retried without re-litigating the human
+   * decision that the change itself is worth applying. A failed dry run
+   * or real apply never throws — it's a normal, informative outcome
+   * (same convention as the Free Mode test runner reporting a failed
+   * test run), so this returns 200 with status 'failed' and the real
+   * `git apply` error in `apply_error`, not an HTTP error status.
+   */
+  app.post("/api/v1/projects/:id/patches/:patchId/apply", async (request, reply) => {
+    const { id, patchId } = request.params as { id: string; patchId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const patch = getPatchById(db, patchId);
+    if (!patch || patch.project_id !== id) {
+      return reply.status(404).send({ error: "Patch not found" });
+    }
+    if (patch.status !== "approved_for_apply" && patch.status !== "failed") {
+      return reply.status(400).send({
+        error: `Patch is "${patch.status}", not "approved_for_apply" — review and approve the diff first via POST .../approve-apply before applying.`,
+      });
+    }
+    if (!patch.diff_text) {
+      return reply.status(400).send({ error: "Patch has no diff to apply." });
+    }
+
+    const result = applyPatchToDisk(project.root_path, patch.diff_text);
+    setPatchApplyResult(db, patchId, result.success ? "applied" : "failed", result.error);
+
+    return reply.status(200).send({ patch: getPatchById(db, patchId) });
+  });
+
+  // --- Phase 19: AI test generation (reviewed & executed) -------------------
+  //
+  // docs/AI_MODE.md §1: "AI-generated tests (reviewed & executed, not
+  // trusted on compile alone)". Mirrors Phases 17-18's two-gate shape —
+  // registering intent never calls a provider, generating never writes a
+  // file, and writing a file always runs the real Phase 9 test command
+  // afterward rather than trusting the AI's code just because it parses.
+  // Unlike patch generation/apply, this only ever creates a NEW file —
+  // /write-and-run refuses to touch a path that already exists, so there
+  // is nothing to dry-run against and no "drifted since generation" case.
+
+  /** Creates a generated-test registration (no code yet) for a finding. */
+  app.post("/api/v1/projects/:id/findings/:findingId/generated-tests", async (request, reply) => {
+    const { id, findingId } = request.params as { id: string; findingId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const finding = getFindingById(db, findingId);
+    if (!finding || finding.project_id !== id) {
+      return reply.status(404).send({ error: "Finding not found" });
+    }
+
+    const body = request.body as { description?: string } | undefined;
+    const generatedTest = createGeneratedTest(db, randomUUID(), {
+      projectId: id,
+      findingId,
+      description: body?.description ?? null,
+    });
+    return reply.status(201).send({ generatedTest });
+  });
+
+  app.get("/api/v1/projects/:id/findings/:findingId/generated-tests", async (request, reply) => {
+    const { id, findingId } = request.params as { id: string; findingId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const finding = getFindingById(db, findingId);
+    if (!finding || finding.project_id !== id) {
+      return reply.status(404).send({ error: "Finding not found" });
+    }
+
+    return reply.status(200).send({ generatedTests: listGeneratedTestsForFinding(db, findingId) });
+  });
+
+  app.get("/api/v1/projects/:id/generated-tests/:testId", async (request, reply) => {
+    const { id, testId } = request.params as { id: string; testId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const generatedTest = getGeneratedTestById(db, testId);
+    if (!generatedTest || generatedTest.project_id !== id) {
+      return reply.status(404).send({ error: "Generated test not found" });
+    }
+
+    return reply.status(200).send({ generatedTest });
+  });
+
+  /** The first human-approval gate: must be approved here before /generate will act on it. */
+  app.post("/api/v1/projects/:id/generated-tests/:testId/approve", async (request, reply) => {
+    const { id, testId } = request.params as { id: string; testId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const generatedTest = getGeneratedTestById(db, testId);
+    if (!generatedTest || generatedTest.project_id !== id) {
+      return reply.status(404).send({ error: "Generated test not found" });
+    }
+    if (generatedTest.status !== "pending_approval") {
+      return reply.status(400).send({ error: `Generated test is "${generatedTest.status}", not "pending_approval" — cannot approve.` });
+    }
+
+    const body = request.body as { reviewerNote?: string } | undefined;
+    createGeneratedTestReview(db, randomUUID(), {
+      generatedTestId: testId,
+      decision: "approved_for_generation",
+      reviewerNote: body?.reviewerNote ?? null,
+    });
+    updateGeneratedTestStatus(db, testId, "approved");
+
+    return reply.status(200).send({ generatedTest: getGeneratedTestById(db, testId) });
+  });
+
+  app.post("/api/v1/projects/:id/generated-tests/:testId/reject", async (request, reply) => {
+    const { id, testId } = request.params as { id: string; testId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const generatedTest = getGeneratedTestById(db, testId);
+    if (!generatedTest || generatedTest.project_id !== id) {
+      return reply.status(404).send({ error: "Generated test not found" });
+    }
+    if (generatedTest.status !== "pending_approval") {
+      return reply.status(400).send({ error: `Generated test is "${generatedTest.status}", not "pending_approval" — cannot reject.` });
+    }
+
+    const body = request.body as { reviewerNote?: string } | undefined;
+    createGeneratedTestReview(db, randomUUID(), {
+      generatedTestId: testId,
+      decision: "rejected_before_generation",
+      reviewerNote: body?.reviewerNote ?? null,
+    });
+    updateGeneratedTestStatus(db, testId, "rejected");
+
+    return reply.status(200).send({ generatedTest: getGeneratedTestById(db, testId) });
+  });
+
+  /** The only route that calls a provider to produce test code — requires the registration to already be 'approved'. */
+  app.post("/api/v1/projects/:id/generated-tests/:testId/generate", async (request, reply) => {
+    const { id, testId } = request.params as { id: string; testId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const generatedTest = getGeneratedTestById(db, testId);
+    if (!generatedTest || generatedTest.project_id !== id) {
+      return reply.status(404).send({ error: "Generated test not found" });
+    }
+    if (generatedTest.status !== "approved") {
+      return reply.status(400).send({
+        error: `Generated test is "${generatedTest.status}", not "approved" — approve it first via POST .../approve before generating.`,
+      });
+    }
+    if (!generatedTest.finding_id) {
+      return reply.status(400).send({ error: "Generated test has no associated finding." });
+    }
+    const finding = getFindingById(db, generatedTest.finding_id);
+    if (!finding) {
+      return reply.status(404).send({ error: "The generated test's finding no longer exists." });
+    }
+
+    const body = request.body as { providerId?: string; budgetTokens?: number } | undefined;
+
+    const resolved = resolveEnabledProvider(db, body);
+    if ("error" in resolved) {
+      return reply.status(resolved.error.status).send({ error: resolved.error.message });
+    }
+    const providerRecord = resolved.provider;
+
+    if (body?.budgetTokens !== undefined && (!Number.isFinite(body.budgetTokens) || body.budgetTokens < 1)) {
+      return reply.status(400).send({ error: "budgetTokens must be a positive integer" });
+    }
+
+    const files = listAllProjectFiles(db, id).map((f) => ({
+      relativePath: f.relative_path,
+      language: f.language,
+      imports: f.imports ? (JSON.parse(f.imports) as string[]) : [],
+      isTest: f.is_test === 1,
+    }));
+
+    try {
+      const result = await generateTest({
+        db,
+        projectId: id,
+        projectRoot: project.root_path,
+        finding,
+        files,
+        providerConfig: {
+          id: providerRecord.id,
+          name: providerRecord.name,
+          kind: providerRecord.kind,
+          baseUrl: providerRecord.base_url,
+          model: providerRecord.model,
+          apiKey: providerRecord.api_key,
+        },
+        budgetTokens: body?.budgetTokens,
+      });
+
+      setGeneratedTestContent(db, testId, result.data.targetPath, result.data.testCode, "proposed");
+
+      return reply.status(200).send({
+        generatedTest: getGeneratedTestById(db, testId),
+        usedFixPlan: result.usedFixPlan,
+        provider: result.provider,
+        model: result.model,
+        usage: result.usage,
+        contextBundle: result.bundle,
+      });
+    } catch (err) {
+      if (err instanceof AIProviderError) {
+        const status = err.kind === "auth_error" ? 401 : err.kind === "rate_limited" ? 429 : 502;
+        return reply.status(status).send({ error: err.message, kind: err.kind });
+      }
+      return reply.status(502).send({ error: err instanceof Error ? err.message : "AI provider request failed." });
+    }
+  });
+
+  /** The second human-approval gate: the generated code must be approved here before /write-and-run will act on it. */
+  app.post("/api/v1/projects/:id/generated-tests/:testId/approve-write", async (request, reply) => {
+    const { id, testId } = request.params as { id: string; testId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const generatedTest = getGeneratedTestById(db, testId);
+    if (!generatedTest || generatedTest.project_id !== id) {
+      return reply.status(404).send({ error: "Generated test not found" });
+    }
+    if (generatedTest.status !== "proposed") {
+      return reply.status(400).send({ error: `Generated test is "${generatedTest.status}", not "proposed" — cannot approve for write.` });
+    }
+
+    const body = request.body as { reviewerNote?: string } | undefined;
+    createGeneratedTestReview(db, randomUUID(), {
+      generatedTestId: testId,
+      decision: "approved_for_write",
+      reviewerNote: body?.reviewerNote ?? null,
+    });
+    updateGeneratedTestStatus(db, testId, "approved_for_write");
+
+    return reply.status(200).send({ generatedTest: getGeneratedTestById(db, testId) });
+  });
+
+  app.post("/api/v1/projects/:id/generated-tests/:testId/reject-write", async (request, reply) => {
+    const { id, testId } = request.params as { id: string; testId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const generatedTest = getGeneratedTestById(db, testId);
+    if (!generatedTest || generatedTest.project_id !== id) {
+      return reply.status(404).send({ error: "Generated test not found" });
+    }
+    if (generatedTest.status !== "proposed") {
+      return reply.status(400).send({ error: `Generated test is "${generatedTest.status}", not "proposed" — cannot reject.` });
+    }
+
+    const body = request.body as { reviewerNote?: string } | undefined;
+    createGeneratedTestReview(db, randomUUID(), {
+      generatedTestId: testId,
+      decision: "rejected_after_review",
+      reviewerNote: body?.reviewerNote ?? null,
+    });
+    updateGeneratedTestStatus(db, testId, "rejected");
+
+    return reply.status(200).send({ generatedTest: getGeneratedTestById(db, testId) });
+  });
+
+  /**
+   * The only route in this feature that writes to a file on disk — and,
+   * unlike Phase 18's patch apply, also executes it. Requires the
+   * generated test to be 'approved_for_write' (or a prior 'written' /
+   * 'failed_tests' / 'passed' outcome, so re-running after e.g. fixing an
+   * unrelated failure elsewhere doesn't require re-approving the same
+   * code). Refuses to overwrite an existing file — this feature only
+   * ever creates new test files. Always runs the project's real,
+   * existing test command (Phase 9) afterward and persists a real
+   * `test_run` row, so nothing here is "trusted on compile alone".
+   */
+  app.post("/api/v1/projects/:id/generated-tests/:testId/write-and-run", async (request, reply) => {
+    const { id, testId } = request.params as { id: string; testId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const generatedTest = getGeneratedTestById(db, testId);
+    if (!generatedTest || generatedTest.project_id !== id) {
+      return reply.status(404).send({ error: "Generated test not found" });
+    }
+    const retryableStatuses = ["approved_for_write", "written", "failed_tests", "passed"];
+    if (!retryableStatuses.includes(generatedTest.status)) {
+      return reply.status(400).send({
+        error: `Generated test is "${generatedTest.status}", not "approved_for_write" — review and approve the code first via POST .../approve-write before writing.`,
+      });
+    }
+    if (!generatedTest.target_path || !generatedTest.test_code) {
+      return reply.status(400).send({ error: "Generated test has no target path or code to write." });
+    }
+
+    let absTarget: string;
+    try {
+      absTarget = resolveWithinRoot(project.root_path, generatedTest.target_path);
+    } catch (err) {
+      if (err instanceof PathTraversalError) {
+        return reply.status(400).send({ error: "The AI-proposed test path escapes the project root — refusing to write it." });
+      }
+      throw err;
+    }
+
+    // Only ever creates a new file — never overwrites anything already on disk,
+    // whether that's a real file the human cares about or a leftover from a
+    // previous run of this same generated test at the same path.
+    const alreadyExisted = fs.existsSync(absTarget);
+    if (!alreadyExisted) {
+      fs.mkdirSync(path.dirname(absTarget), { recursive: true });
+      fs.writeFileSync(absTarget, generatedTest.test_code, "utf-8");
+    } else if (generatedTest.status === "approved_for_write") {
+      // First attempt for this generated test, but something is already there — refuse.
+      return reply.status(400).send({
+        error: `A file already exists at "${generatedTest.target_path}" — AI test generation only creates new test files, it never overwrites one.`,
+      });
+    }
+    // else: this is a retry of a generated test that already wrote its own
+    // file on a prior attempt (status written/failed_tests/passed) — the
+    // file existing is expected, not a conflict; just re-run the suite.
+
+    const outcome = await runTests(project.root_path);
+    const testRunId = randomUUID();
+    const testRun = saveTestRun(db, testRunId, id, outcome);
+
+    const status = !outcome.supported ? "written" : outcome.exitCode === 0 ? "passed" : "failed_tests";
+    setGeneratedTestRunResult(db, testId, status, testRunId);
+
+    return reply.status(200).send({
+      generatedTest: getGeneratedTestById(db, testId),
+      testRun,
+      supported: outcome.supported,
+      reason: outcome.reason,
+    });
+  });
+
+  app.get("/api/v1/projects/:id/git", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const query = request.query as { commitLimit?: string; churnDays?: string };
+    const commitLimit = query.commitLimit ? Number(query.commitLimit) : undefined;
+    if (commitLimit !== undefined && (!Number.isFinite(commitLimit) || commitLimit < 1)) {
+      return reply.status(400).send({ error: "commitLimit must be a positive integer" });
+    }
+    const churnWindowDays = query.churnDays ? Number(query.churnDays) : undefined;
+    if (churnWindowDays !== undefined && (!Number.isFinite(churnWindowDays) || churnWindowDays < 1)) {
+      return reply.status(400).send({ error: "churnDays must be a positive integer" });
+    }
+
+    const result = analyzeGit(project.root_path, { commitLimit, churnWindowDays });
+    return reply.status(200).send(result);
+  });
+
+  app.post("/api/v1/projects/:id/tests/run", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    // Synchronous, bounded by runTests' internal timeout — same pattern as
+    // POST /analysis (Phase 6/7), not a background job queue. Test suites
+    // in this product's supported frameworks (Vitest, Maven) normally
+    // finish in seconds to low minutes; the timeout exists to bound the
+    // worst case, not because this is expected to be slow.
+    const outcome = await runTests(project.root_path);
+    const runId = randomUUID();
+    const run = saveTestRun(db, runId, id, outcome);
+
+    return reply.status(200).send({ run, supported: outcome.supported, reason: outcome.reason });
+  });
+
+  app.get("/api/v1/projects/:id/tests", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const query = request.query as { limit?: string };
+    const limit = query.limit ? Number(query.limit) : undefined;
+    const runs = listTestRuns(db, id, limit);
+    return reply.status(200).send({ runs });
+  });
+
+  app.get("/api/v1/projects/:id/tests/:runId", async (request, reply) => {
+    const { id, runId } = request.params as { id: string; runId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const run = getTestRun(db, runId);
+    if (!run || run.project_id !== id) {
+      return reply.status(404).send({ error: "Test run not found" });
+    }
+    return reply.status(200).send({ run });
+  });
+
+  app.get("/api/v1/projects/:id/security", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const result = scanSecurity(project.root_path);
+    return reply.status(200).send(result);
+  });
+
+  app.get("/api/v1/projects/:id/dependencies", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const result = analyzeDependencies(project.root_path);
+    return reply.status(200).send(result);
+  });
+
+  app.get("/api/v1/projects/:id/audit", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const report = buildAuditReport(db, project);
+    return reply.status(200).send(report);
+  });
+
+  app.get("/api/v1/projects/:id/audit/export", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const report = buildAuditReport(db, project);
+    const markdown = buildAuditMarkdown(report);
+    const filename = `${project.name.replace(/[^a-z0-9_-]+/gi, "_")}-audit-${report.generatedAt.slice(0, 10)}.md`;
+
+    return reply
+      .status(200)
+      .header("Content-Type", "text/markdown; charset=utf-8")
+      .header("Content-Disposition", `attachment; filename="${filename}"`)
+      .send(markdown);
+  });
+}
