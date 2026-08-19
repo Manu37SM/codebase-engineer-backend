@@ -35,7 +35,23 @@ export function applyPatchToDisk(projectRoot: string, diffText: string): ApplyPa
 }
 
 function runGitApply(projectRoot: string, diffText: string, dryRun: boolean): ApplyPatchResult {
-  const args = dryRun ? ["apply", "--check", "-"] : ["apply", "-"];
+  // `-c core.autocrlf=false -c core.safecrlf=false` overrides the user's
+  // global/repo git config for just this invocation. Without this, on a
+  // machine where `core.autocrlf=true` (the common Windows Git-for-Windows
+  // installer default), `git apply` silently rewrites `\n` to `\r\n` in the
+  // file content it writes, so the file on disk no longer matches the diff
+  // byte-for-byte and downstream consumers (e.g. an immediately-following
+  // AI-generated-test write, or a human diffing again) see unexpected
+  // changes. This product always wants the exact bytes the diff specifies,
+  // regardless of the host machine's line-ending config, so autocrlf is
+  // force-disabled for both the dry-run and the real apply. `safecrlf=false`
+  // is disabled alongside it so a mixed-line-ending file can't cause `git
+  // apply` to abort — this tool already validates via `--check` first, so a
+  // separate safecrlf abort would just be a confusing extra failure mode.
+  const configArgs = ["-c", "core.autocrlf=false", "-c", "core.safecrlf=false"];
+  const args = dryRun
+    ? [...configArgs, "apply", "--check", "-"]
+    : [...configArgs, "apply", "-"];
   try {
     execFileSync("git", args, {
       cwd: projectRoot,

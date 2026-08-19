@@ -10,6 +10,7 @@ import {
   getLatestSnapshot,
 } from "../db/projectRepo.js";
 import { assertValidProjectRoot, resolveWithinRoot, PathTraversalError } from "../security/paths.js";
+import { checkAiOperationAllowed } from "../billing/usageLimiter.js";
 import { discoverRepository } from "../discovery/index.js";
 import { indexRepository } from "../indexer/index.js";
 import { replaceProjectFiles, listProjectFiles, listAllProjectFiles } from "../db/fileRepo.js";
@@ -48,7 +49,13 @@ import {
   setPatchDiff,
   updatePatchStatus,
 } from "../db/patchRepo.js";
-import { getLatestSuccessfulResponse } from "../db/aiRequestRepo.js";
+import {
+  getLatestSuccessfulResponse,
+  getLatestSuccessfulResponseForTestRun,
+  getLatestSuccessfulResponseForPatch,
+} from "../db/aiRequestRepo.js";
+import { diagnoseFailure, parseFailureDiagnosisSections, FAILURE_DIAGNOSIS_OPERATION_TYPE } from "../ai/workflows/diagnoseFailure.js";
+import { selfReviewPatch, parseSelfReviewSections, SELF_REVIEW_OPERATION_TYPE } from "../ai/workflows/selfReview.js";
 import { getProviderConfigById, listProviderConfigs, type ProviderConfigRecord } from "../db/aiProviderRepo.js";
 import { AIProviderError } from "../ai/provider/types.js";
 import { generateTest } from "../ai/workflows/generateTest.js";
@@ -74,11 +81,24 @@ interface RegisterProjectsRoutesOptions {
  * one if none was specified — with the same honest 400 messages every
  * such route needs. Shared by `/explain` and `/root-cause` (Phase 14/15)
  * rather than duplicated per route.
+ *
+ * Also the single choke point all 7 AI-spending routes go through (Phase
+ * 26): checks `checkAiOperationAllowed()` before resolving a provider, so
+ * a usage-limited instance never even gets to "which provider" before
+ * being told the monthly limit is reached. When billing isn't configured
+ * (the default), `checkAiOperationAllowed()` always returns
+ * `allowed: true` — zero behavior change for every instance that hasn't
+ * opted into billing, per docs/PRD.md §3's "AI is optional" principle.
  */
 function resolveEnabledProvider(
   db: DB,
   body: { providerId?: string } | undefined
 ): { provider: ProviderConfigRecord } | { error: { status: number; message: string } } {
+  const usage = checkAiOperationAllowed(db);
+  if (!usage.allowed) {
+    return { error: { status: 402, message: usage.reason ?? "Monthly AI operation limit reached." } };
+  }
+
   const providerRecord = body?.providerId
     ? getProviderConfigById(db, body.providerId)
     : listProviderConfigs(db).find((p) => p.enabled === 1);
@@ -922,6 +942,118 @@ export function registerProjectsRoutes(
     return reply.status(200).send({ patch: getPatchById(db, patchId) });
   });
 
+  /**
+   * Read-only lookup of the most recent successful self-review on file
+   * for a patch — like `/findings/:findingId/root-cause`, reparses the
+   * stored raw response into its seven checks on every fetch rather than
+   * persisting the parsed shape, and never calls a provider.
+   */
+  app.get("/api/v1/projects/:id/patches/:patchId/self-review", async (request, reply) => {
+    const { id, patchId } = request.params as { id: string; patchId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const patch = getPatchById(db, patchId);
+    if (!patch || patch.project_id !== id) {
+      return reply.status(404).send({ error: "Patch not found" });
+    }
+
+    const response = getLatestSuccessfulResponseForPatch(db, patchId, SELF_REVIEW_OPERATION_TYPE);
+    if (!response) {
+      return reply.status(200).send({ review: null });
+    }
+    return reply.status(200).send({
+      review: parseSelfReviewSections(response.content ?? ""),
+      provider: response.provider,
+      model: response.model,
+      generatedAt: response.requestCreatedAt,
+    });
+  });
+
+  /**
+   * Phase 21's AI call: docs/AI_MODE.md §6's self-review checklist, run
+   * against a real patch's real diff. Advisory only — this never changes
+   * the patch's `status` and is never a precondition for `/approve-apply`
+   * or `/apply`; it can be requested at any point once the patch has a
+   * real `diff_text` (any status past `proposed`), including more than
+   * once for the same diff. Read-only in the sense that matters for this
+   * product's security model: never writes to the finding, the patch
+   * record's status, or any file.
+   */
+  app.post("/api/v1/projects/:id/patches/:patchId/self-review", async (request, reply) => {
+    const { id, patchId } = request.params as { id: string; patchId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const patch = getPatchById(db, patchId);
+    if (!patch || patch.project_id !== id) {
+      return reply.status(404).send({ error: "Patch not found" });
+    }
+    if (!patch.diff_text) {
+      return reply.status(400).send({ error: "Patch has no diff yet — generate one first via POST .../generate." });
+    }
+    if (!patch.finding_id) {
+      return reply.status(400).send({ error: "Patch has no associated finding to ground the self-review in." });
+    }
+    const finding = getFindingById(db, patch.finding_id);
+    if (!finding) {
+      return reply.status(404).send({ error: "Patch's finding not found." });
+    }
+
+    const body = request.body as { providerId?: string; budgetTokens?: number } | undefined;
+
+    const resolved = resolveEnabledProvider(db, body);
+    if ("error" in resolved) {
+      return reply.status(resolved.error.status).send({ error: resolved.error.message });
+    }
+    const providerRecord = resolved.provider;
+
+    if (body?.budgetTokens !== undefined && (!Number.isFinite(body.budgetTokens) || body.budgetTokens < 1)) {
+      return reply.status(400).send({ error: "budgetTokens must be a positive integer" });
+    }
+
+    const files = listAllProjectFiles(db, id).map((f) => ({
+      relativePath: f.relative_path,
+      language: f.language,
+      imports: f.imports ? (JSON.parse(f.imports) as string[]) : [],
+      isTest: f.is_test === 1,
+    }));
+
+    try {
+      const result = await selfReviewPatch({
+        db,
+        projectId: id,
+        projectRoot: project.root_path,
+        finding,
+        patch,
+        files,
+        providerConfig: {
+          id: providerRecord.id,
+          name: providerRecord.name,
+          kind: providerRecord.kind,
+          baseUrl: providerRecord.base_url,
+          model: providerRecord.model,
+          apiKey: providerRecord.api_key,
+        },
+        budgetTokens: body?.budgetTokens,
+      });
+
+      return reply.status(200).send({
+        review: result.review,
+        provider: result.provider,
+        model: result.model,
+        usage: result.usage,
+        contextBundle: result.bundle,
+      });
+    } catch (err) {
+      if (err instanceof AIProviderError) {
+        const status = err.kind === "auth_error" ? 401 : err.kind === "rate_limited" ? 429 : 502;
+        return reply.status(status).send({ error: err.message, kind: err.kind });
+      }
+      return reply.status(502).send({ error: err instanceof Error ? err.message : "AI provider request failed." });
+    }
+  });
+
   // --- Phase 19: AI test generation (reviewed & executed) -------------------
   //
   // docs/AI_MODE.md §1: "AI-generated tests (reviewed & executed, not
@@ -1285,6 +1417,110 @@ export function registerProjectsRoutes(
       return reply.status(404).send({ error: "Test run not found" });
     }
     return reply.status(200).send({ run });
+  });
+
+  /**
+   * Read-only lookup of the most recent successful failure diagnosis on
+   * file for a test run — like `/findings/:findingId/root-cause`,
+   * reparses the stored raw response into its three sections on every
+   * fetch rather than persisting the parsed shape, and never calls a
+   * provider.
+   */
+  app.get("/api/v1/projects/:id/tests/:runId/diagnosis", async (request, reply) => {
+    const { id, runId } = request.params as { id: string; runId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const run = getTestRun(db, runId);
+    if (!run || run.project_id !== id) {
+      return reply.status(404).send({ error: "Test run not found" });
+    }
+
+    const response = getLatestSuccessfulResponseForTestRun(db, runId, FAILURE_DIAGNOSIS_OPERATION_TYPE);
+    if (!response) {
+      return reply.status(200).send({ diagnosis: null });
+    }
+    return reply.status(200).send({
+      diagnosis: parseFailureDiagnosisSections(response.content ?? ""),
+      provider: response.provider,
+      model: response.model,
+      generatedAt: response.requestCreatedAt,
+    });
+  });
+
+  /**
+   * Phase 20's AI call: docs/AI_MODE.md §4's "(if failure) AI Diagnosis"
+   * workflow step. Only callable for a run whose `status` is `failed` —
+   * a passed, timed-out, or unsupported run has nothing to diagnose in
+   * this sense (a timeout or "no test command found" isn't a test
+   * failure to explain, it's a different kind of problem entirely).
+   * Read-only: never writes to the test run or proposes an applied
+   * change, same as `/findings/:findingId/root-cause`.
+   */
+  app.post("/api/v1/projects/:id/tests/:runId/diagnose", async (request, reply) => {
+    const { id, runId } = request.params as { id: string; runId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const run = getTestRun(db, runId);
+    if (!run || run.project_id !== id) {
+      return reply.status(404).send({ error: "Test run not found" });
+    }
+    if (run.status !== "failed") {
+      return reply.status(400).send({ error: `Only a run with status 'failed' can be diagnosed (this run's status is '${run.status}').` });
+    }
+
+    const body = request.body as { providerId?: string; budgetTokens?: number } | undefined;
+
+    const resolved = resolveEnabledProvider(db, body);
+    if ("error" in resolved) {
+      return reply.status(resolved.error.status).send({ error: resolved.error.message });
+    }
+    const providerRecord = resolved.provider;
+
+    if (body?.budgetTokens !== undefined && (!Number.isFinite(body.budgetTokens) || body.budgetTokens < 1)) {
+      return reply.status(400).send({ error: "budgetTokens must be a positive integer" });
+    }
+
+    const files = listAllProjectFiles(db, id).map((f) => ({
+      relativePath: f.relative_path,
+      language: f.language,
+      imports: f.imports ? (JSON.parse(f.imports) as string[]) : [],
+      isTest: f.is_test === 1,
+    }));
+
+    try {
+      const result = await diagnoseFailure({
+        db,
+        projectId: id,
+        projectRoot: project.root_path,
+        testRun: run,
+        files,
+        providerConfig: {
+          id: providerRecord.id,
+          name: providerRecord.name,
+          kind: providerRecord.kind,
+          baseUrl: providerRecord.base_url,
+          model: providerRecord.model,
+          apiKey: providerRecord.api_key,
+        },
+        budgetTokens: body?.budgetTokens,
+      });
+
+      return reply.status(200).send({
+        diagnosis: result.diagnosis,
+        provider: result.provider,
+        model: result.model,
+        usage: result.usage,
+        contextBundle: result.bundle,
+      });
+    } catch (err) {
+      if (err instanceof AIProviderError) {
+        const status = err.kind === "auth_error" ? 401 : err.kind === "rate_limited" ? 429 : 502;
+        return reply.status(status).send({ error: err.message, kind: err.kind });
+      }
+      return reply.status(502).send({ error: err instanceof Error ? err.message : "AI provider request failed." });
+    }
   });
 
   app.get("/api/v1/projects/:id/security", async (request, reply) => {

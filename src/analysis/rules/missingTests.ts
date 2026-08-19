@@ -30,6 +30,7 @@ export const missingTestsRule: Rule = {
   run(ctx: AnalysisContext): Finding[] {
     const findings: Finding[] = [];
     const testedByImport = collectFilesReferencedByTests(ctx.files);
+    const testedByNamingConvention = collectBaseNamesWithCorrespondingTest(ctx.allPaths);
 
     for (const file of ctx.files) {
       if (file.isTest || file.isGenerated) continue;
@@ -40,7 +41,7 @@ export const missingTestsRule: Rule = {
       if (SKIP_BASENAMES.has(baseName.toLowerCase())) continue;
 
       if (testedByImport.has(file.relativePath)) continue;
-      if (hasCorrespondingTest(baseName, ctx.allPaths)) continue;
+      if (testedByNamingConvention.has(baseName)) continue;
 
       findings.push({
         ruleId: "missing-test-file",
@@ -99,17 +100,32 @@ function collectFilesReferencedByTests(files: { relativePath: string; language: 
   return reached;
 }
 
-function hasCorrespondingTest(baseName: string, allPaths: Set<string>): boolean {
+/** Fixed suffixes `hasCorrespondingTest` used to reconstruct per-candidate (`${baseName}${suffix}`) and compare against every path in the repo — O(files × allPaths). Precomputing the reverse direction once (which *source* base name would this suffix, if stripped, correspond to?) turns the whole naming-convention check into a single O(allPaths) pass plus O(files) O(1) lookups. */
+const NAMING_CONVENTION_SUFFIXES = [
+  ...TEST_EXTENSIONS.flatMap((ext) => [`.test${ext}`, `.spec${ext}`]),
+  "Test.java",
+  "Tests.java",
+  "IT.java",
+];
+
+/**
+ * Returns the set of source-file base names that have a corresponding test
+ * file present anywhere in the repo by naming convention (e.g. `foo.ts` is
+ * "covered" if `foo.test.ts`, `foo.spec.ts`, etc. exists anywhere). Computed
+ * once per analysis run, in one pass over every path — the O(N²) alternative
+ * (re-scanning all paths per candidate source file, which this replaced) was
+ * measured to dominate `missing-test-file`'s runtime on a ~3,700-file corpus
+ * (~1.4s of the rule's ~1.4-1.7s total). See `docs/PERFORMANCE.md`.
+ */
+function collectBaseNamesWithCorrespondingTest(allPaths: Set<string>): Set<string> {
+  const baseNames = new Set<string>();
   for (const candidatePath of allPaths) {
     const candidateBase = path.posix.basename(candidatePath);
-    for (const ext of TEST_EXTENSIONS) {
-      if (candidateBase === `${baseName}.test${ext}` || candidateBase === `${baseName}.spec${ext}`) {
-        return true;
+    for (const suffix of NAMING_CONVENTION_SUFFIXES) {
+      if (candidateBase.endsWith(suffix)) {
+        baseNames.add(candidateBase.slice(0, -suffix.length));
       }
     }
-    if (candidateBase === `${baseName}Test.java` || candidateBase === `${baseName}Tests.java` || candidateBase === `${baseName}IT.java`) {
-      return true;
-    }
   }
-  return false;
+  return baseNames;
 }

@@ -1,0 +1,12 @@
+-- Migration 009: AI failure diagnosis (Phase 20)
+--
+-- Migration 005's comment on ai_request.finding_id explicitly anticipated
+-- this: "docs/AI_MODE.md names other target kinds — TestRun, refactor
+-- request — that aren't implemented yet and would need this same column
+-- to stay nullable for them too." Phase 20 is the first TestRun-target AI
+-- workflow (docs/AI_MODE.md §4's "(if failure) AI Diagnosis" step), so
+-- this adds the equivalent nullable link for it rather than reusing
+-- finding_id for a different kind of target. Purely additive — no
+-- existing column is touched, and every prior ai_request row simply gets
+-- test_run_id = NULL.
+ALTER TABLE ai_request ADD COLUMN test_run_id TEXT REFERENCES test_run(id) ON DELETE CASCADE;

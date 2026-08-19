@@ -15,6 +15,10 @@ export interface AIRequestRecord {
   id: string;
   project_id: string | null;
   finding_id: string | null;
+  /** Phase 20's TestRun-target equivalent of `finding_id` — see migration 009. Exactly one of the two is set for any real workflow call so far; both may be null for pre-Phase-14 accounting rows. */
+  test_run_id: string | null;
+  /** Phase 21's Patch-target equivalent — see migration 010. Set alongside `finding_id` for self-review (a patch always has one), never alongside `test_run_id`. */
+  patch_id: string | null;
   provider: string;
   model: string;
   operation_type: string;
@@ -35,6 +39,10 @@ export interface AIResponseRecord {
 export interface CreateAIRequestInput {
   projectId: string | null;
   findingId: string | null;
+  /** Phase 20 addition — omit or pass `null` for Finding-target workflows, exactly as `findingId` is `null` for this new TestRun-target one. */
+  testRunId?: string | null;
+  /** Phase 21 addition — set alongside `findingId` for a patch self-review, since a patch always belongs to a finding but self-review's accounting needs to be scoped to the specific patch/diff reviewed. */
+  patchId?: string | null;
   provider: string;
   model: string;
   operationType: string;
@@ -43,12 +51,14 @@ export interface CreateAIRequestInput {
 
 export function createAIRequest(db: DB, id: string, input: CreateAIRequestInput): AIRequestRecord {
   db.prepare(
-    `INSERT INTO ai_request (id, project_id, finding_id, provider, model, operation_type, estimated_tokens, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`
+    `INSERT INTO ai_request (id, project_id, finding_id, test_run_id, patch_id, provider, model, operation_type, estimated_tokens, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`
   ).run(
     id,
     input.projectId,
     input.findingId,
+    input.testRunId ?? null,
+    input.patchId ?? null,
     input.provider,
     input.model,
     input.operationType,
@@ -102,6 +112,57 @@ export function getLatestSuccessfulResponse(
        LIMIT 1`
     )
     .get(findingId, operationType) as
+    | (AIResponseRecord & { requestCreatedAt: string; provider: string; model: string })
+    | undefined;
+}
+
+/**
+ * Phase 20's TestRun-target equivalent of `getLatestSuccessfulResponse` —
+ * same "don't re-spend tokens on a repeat call" purpose, keyed by
+ * `test_run_id` instead of `finding_id` since a failure diagnosis is
+ * about a `TestRun`, not a `Finding`.
+ */
+export function getLatestSuccessfulResponseForTestRun(
+  db: DB,
+  testRunId: string,
+  operationType: string
+): (AIResponseRecord & { requestCreatedAt: string; provider: string; model: string }) | undefined {
+  return db
+    .prepare(
+      `SELECT r.*, q.created_at as requestCreatedAt, q.provider as provider, q.model as model
+       FROM ai_response r
+       JOIN ai_request q ON q.id = r.ai_request_id
+       WHERE q.test_run_id = ? AND q.operation_type = ? AND r.success = 1
+       ORDER BY r.rowid DESC
+       LIMIT 1`
+    )
+    .get(testRunId, operationType) as
+    | (AIResponseRecord & { requestCreatedAt: string; provider: string; model: string })
+    | undefined;
+}
+
+/**
+ * Phase 21's Patch-target equivalent of `getLatestSuccessfulResponse` —
+ * keyed by `patch_id` rather than `finding_id` so a self-review result
+ * stays tied to the exact diff it reviewed, not just "the finding" (a
+ * finding can have several patches, and a patch can be regenerated more
+ * than once).
+ */
+export function getLatestSuccessfulResponseForPatch(
+  db: DB,
+  patchId: string,
+  operationType: string
+): (AIResponseRecord & { requestCreatedAt: string; provider: string; model: string }) | undefined {
+  return db
+    .prepare(
+      `SELECT r.*, q.created_at as requestCreatedAt, q.provider as provider, q.model as model
+       FROM ai_response r
+       JOIN ai_request q ON q.id = r.ai_request_id
+       WHERE q.patch_id = ? AND q.operation_type = ? AND r.success = 1
+       ORDER BY r.rowid DESC
+       LIMIT 1`
+    )
+    .get(patchId, operationType) as
     | (AIResponseRecord & { requestCreatedAt: string; provider: string; model: string })
     | undefined;
 }

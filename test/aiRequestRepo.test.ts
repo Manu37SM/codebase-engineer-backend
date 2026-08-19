@@ -11,8 +11,12 @@ import {
   createAIResponse,
   getAIRequestById,
   getLatestSuccessfulResponse,
+  getLatestSuccessfulResponseForTestRun,
+  getLatestSuccessfulResponseForPatch,
   markAIRequestStatus,
 } from "../src/db/aiRequestRepo.js";
+import { saveTestRun } from "../src/db/testRunRepo.js";
+import { createPatch } from "../src/db/patchRepo.js";
 
 describe("aiRequestRepo", () => {
   let tmpDir: string;
@@ -139,5 +143,84 @@ describe("aiRequestRepo", () => {
     }
 
     expect(getLatestSuccessfulResponse(db, findingId, "explain-finding")?.content).toBe("second explanation");
+  });
+
+  it("keeps test_run_id-keyed accounting rows (Phase 20) independent of finding_id-keyed ones", () => {
+    const run = saveTestRun(db, randomUUID(), projectId, {
+      supported: true,
+      framework: "vitest",
+      command: "vitest run",
+      exitCode: 1,
+      durationMs: 100,
+      stdout: "FAIL",
+      stderr: "",
+      passed: 0,
+      failed: 1,
+      skipped: 0,
+      timedOut: false,
+    });
+
+    const requestId = randomUUID();
+    const created = createAIRequest(db, requestId, {
+      projectId,
+      findingId: null,
+      testRunId: run.id,
+      provider: "openai-compatible",
+      model: "gpt-test",
+      operationType: "failure-diagnosis",
+      estimatedTokens: 20,
+    });
+    expect(created.test_run_id).toBe(run.id);
+    expect(created.finding_id).toBeNull();
+
+    markAIRequestStatus(db, requestId, "succeeded");
+    createAIResponse(db, randomUUID(), {
+      aiRequestId: requestId,
+      estimatedTokens: 8,
+      latencyMs: 30,
+      success: true,
+      content: "LIKELY_CAUSE:\nsomething broke.",
+    });
+
+    const stored = getLatestSuccessfulResponseForTestRun(db, run.id, "failure-diagnosis");
+    expect(stored?.content).toContain("something broke");
+
+    // A finding-keyed lookup with the same operation_type must not see this row.
+    expect(getLatestSuccessfulResponse(db, findingId, "failure-diagnosis")).toBeUndefined();
+  });
+
+  it("keeps patch_id-keyed accounting rows (Phase 21) independent per patch, even for the same finding", () => {
+    const patchAId = randomUUID();
+    createPatch(db, patchAId, { projectId, findingId, description: null });
+    const patchB_Id = randomUUID();
+    createPatch(db, patchB_Id, { projectId, findingId, description: null });
+
+    for (const [patchId, content] of [
+      [patchAId, "CORRECTNESS: pass - fine for A."],
+      [patchB_Id, "CORRECTNESS: fail - wrong for B."],
+    ] as const) {
+      const requestId = randomUUID();
+      const created = createAIRequest(db, requestId, {
+        projectId,
+        findingId,
+        patchId,
+        provider: "openai-compatible",
+        model: "gpt-test",
+        operationType: "patch-self-review",
+        estimatedTokens: 15,
+      });
+      expect(created.patch_id).toBe(patchId);
+      markAIRequestStatus(db, requestId, "succeeded");
+      createAIResponse(db, randomUUID(), {
+        aiRequestId: requestId,
+        estimatedTokens: 6,
+        latencyMs: 20,
+        success: true,
+        content,
+      });
+    }
+
+    expect(getLatestSuccessfulResponseForPatch(db, patchAId, "patch-self-review")?.content).toContain("fine for A");
+    expect(getLatestSuccessfulResponseForPatch(db, patchB_Id, "patch-self-review")?.content).toContain("wrong for B");
   });
 });

@@ -1,5 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { runAnalysis } from "../src/analysis/index.js";
+import { buildAnalysisContext } from "../src/analysis/context.js";
+import { missingTestsRule } from "../src/analysis/rules/missingTests.js";
 import { makeTempRepo, writeFile, cleanupRepo } from "./fixtures.js";
 
 describe("runAnalysis — large-file rule", () => {
@@ -175,6 +177,41 @@ describe("runAnalysis — missing-test-file rule", () => {
 
     const { findings } = runAnalysis(root);
     expect(findings.filter((f) => f.ruleId === "missing-test-file")).toHaveLength(0);
+  });
+
+  it("scales roughly linearly with repo size, not quadratically (perf regression guard)", () => {
+    // Phase 23 perf fix: the naming-convention check used to re-scan every
+    // path in the repo for every candidate source file (O(files x paths)).
+    // On a real ~3,700-file corpus that alone cost ~1.4s out of the rule's
+    // ~1.7s total (see docs/PERFORMANCE.md) — fixed by precomputing the set
+    // of "has a corresponding test by naming convention" base names once.
+    // This constructs a repo deliberately shaped to make the old O(N^2)
+    // behavior expensive (every candidate file is a genuine miss, so the
+    // old code always scanned every path to exhaustion before giving up)
+    // and asserts the rule stays fast — a generous bound that the old
+    // implementation would blow through at this file count, but that the
+    // fixed O(N) implementation clears with room to spare.
+    root = makeTempRepo();
+    const body = Array.from({ length: 45 }, (_, i) => `export const v${i} = ${i};`).join("\n");
+    const FILE_COUNT = 1500;
+    for (let i = 0; i < FILE_COUNT; i++) {
+      // No naming-convention match and nothing imports these — every file
+      // is a genuine "no corresponding test" case, the worst case for the
+      // old linear-scan-per-candidate implementation.
+      writeFile(root, `src/module_${i}/unrelated_${i}.ts`, body);
+    }
+
+    const ctx = buildAnalysisContext(root);
+    const start = performance.now();
+    const findings = missingTestsRule.run(ctx);
+    const elapsedMs = performance.now() - start;
+
+    expect(findings).toHaveLength(FILE_COUNT);
+    // At 1500 files, the old O(N^2) naming-convention scan alone measured
+    // ~230ms+ on this corpus's growth curve; the fixed O(N) version
+    // measures single-digit milliseconds. 400ms leaves generous headroom
+    // for slower CI hardware while still catching a real O(N^2) regression.
+    expect(elapsedMs).toBeLessThan(400);
   });
 });
 

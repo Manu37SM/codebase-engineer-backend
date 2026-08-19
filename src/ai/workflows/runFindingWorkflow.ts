@@ -20,6 +20,8 @@ export interface RunFindingWorkflowOptions {
   budgetTokens?: number;
   /** Distinguishes this call's accounting row from other Finding-target workflows (e.g. "explain-finding" vs "root-cause-analysis") sharing the same `ai_request`/`ai_response` tables. */
   operationType: string;
+  /** Phase 21 addition — set by `selfReviewPatch` so its accounting row is scoped to the exact patch/diff reviewed (see migration 010), not just "the finding". Omitted (defaults to `null`) by every other Finding-target workflow. */
+  patchId?: string | null;
   /** Builds the system/user messages from the finding and its (already redacted, content-included) context bundle. */
   buildPrompt: (finding: FindingRecord, bundle: ContextBundle) => { system: string; user: string };
 }
@@ -44,7 +46,7 @@ export interface RunFindingWorkflowResult {
  * supplies its own prompt and its own parsing of the raw response.
  */
 export async function runFindingWorkflow(options: RunFindingWorkflowOptions): Promise<RunFindingWorkflowResult> {
-  const { db, projectId, projectRoot, finding, files, providerConfig, operationType, buildPrompt } = options;
+  const { db, projectId, projectRoot, finding, files, providerConfig, operationType, buildPrompt, patchId } = options;
   const budgetTokens = options.budgetTokens ?? DEFAULT_BUDGET_TOKENS;
 
   const bundle = selectContextForFinding({
@@ -68,6 +70,7 @@ export async function runFindingWorkflow(options: RunFindingWorkflowOptions): Pr
   createAIRequest(db, requestId, {
     projectId,
     findingId: finding.id,
+    patchId: patchId ?? null,
     provider: providerConfig.kind,
     model: providerConfig.model ?? "unknown",
     operationType,

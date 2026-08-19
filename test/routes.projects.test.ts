@@ -1434,6 +1434,135 @@ describe("projects API", () => {
     expect(generateRes.statusCode).toBe(404);
   });
 
+  // --- Phase 21: AI self-review ---------------------------------------------
+
+  const GOOD_SELF_REVIEW_RESPONSE =
+    "CORRECTNESS: pass - the diff reads the key from an environment variable instead of hardcoding it.\n" +
+    "SCOPE_CREEP: pass - only the affected line changes.\n" +
+    "REGRESSIONS: pass - no other code path is affected.\n" +
+    "SECURITY: pass - the hardcoded secret is removed.\n" +
+    "MISSING_TESTS: concern - no test asserts the env var is actually read.\n" +
+    "UNNECESSARY_COMPLEXITY: pass - minimal fix.\n" +
+    "ARCHITECTURE_CONSISTENCY: pass - matches existing config-loading style.";
+
+  async function setUpGeneratedPatch(): Promise<{ project: any; finding: any; patch: any }> {
+    const { project, finding } = await setUpFindingWithFixPlan();
+
+    const createRes = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${project.id}/findings/${finding.id}/patches`,
+    });
+    const patch = createRes.json().patch;
+
+    const { url: genUrl, close: closeGen } = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ model: "gpt-test", choices: [{ message: { content: PATCH_DIFF }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }));
+    });
+    const providerRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/ai/providers",
+      payload: { name: "Self-Review Gen Provider", kind: "openai-compatible", baseUrl: genUrl, model: "gpt-test" },
+    });
+    await app.inject({ method: "PATCH", url: `/api/v1/ai/providers/${providerRes.json().provider.id}`, payload: { enabled: true } });
+    await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/patches/${patch.id}/approve` });
+    const generateRes = await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/patches/${patch.id}/generate` });
+    await closeGen();
+    expect(generateRes.json().patch.status).toBe("proposed");
+
+    return { project, finding, patch: generateRes.json().patch };
+  }
+
+  it("GET self-review returns null before any self-review has been generated", async () => {
+    const { project, patch } = await setUpGeneratedPatch();
+
+    const res = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/patches/${patch.id}/self-review` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().review).toBeNull();
+  });
+
+  it("refuses to self-review a patch with no diff yet", async () => {
+    const { project, finding } = await setUpFindingWithFixPlan();
+    const createRes = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${project.id}/findings/${finding.id}/patches`,
+    });
+    const patch = createRes.json().patch;
+
+    const res = await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/patches/${patch.id}/self-review` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/no diff yet/);
+  });
+
+  it("self-reviews a real generated patch end to end, then serves the stored review on GET, without changing the patch's status", async () => {
+    const { project, patch } = await setUpGeneratedPatch();
+
+    const { url: reviewUrl, close: closeReview } = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          model: "gpt-test",
+          choices: [{ message: { content: GOOD_SELF_REVIEW_RESPONSE }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 30, completion_tokens: 12 },
+        })
+      );
+    });
+    const providerRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/ai/providers",
+      payload: { name: "Self-Review Provider", kind: "openai-compatible", baseUrl: reviewUrl, model: "gpt-test" },
+    });
+    await app.inject({ method: "PATCH", url: `/api/v1/ai/providers/${providerRes.json().provider.id}`, payload: { enabled: true } });
+
+    const reviewRes = await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/patches/${patch.id}/self-review` });
+    await closeReview();
+    expect(reviewRes.statusCode).toBe(200);
+    const body = reviewRes.json();
+    expect(body.review.correctness.status).toBe("pass");
+    expect(body.review.missingTests.status).toBe("concern");
+    expect(body.contextBundle.selected.length).toBeGreaterThan(0);
+
+    // Self-review is advisory only — the patch's own status is untouched.
+    const patchAfter = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/patches/${patch.id}` });
+    expect(patchAfter.json().patch.status).toBe("proposed");
+
+    const getRes = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/patches/${patch.id}/self-review` });
+    expect(getRes.statusCode).toBe(200);
+    expect(getRes.json().review.correctness.status).toBe("pass");
+    expect(getRes.json().provider).toBe("openai-compatible");
+  });
+
+  it("refuses self-review without an enabled AI provider", async () => {
+    const { project, patch } = await setUpGeneratedPatch();
+
+    // setUpGeneratedPatch left a provider enabled (used for generation) —
+    // disable it so this test genuinely exercises the "no enabled
+    // provider" 400 path rather than a real network failure against the
+    // now-closed generation server.
+    const providersRes = await app.inject({ method: "GET", url: "/api/v1/ai/providers" });
+    for (const p of providersRes.json().providers) {
+      await app.inject({ method: "PATCH", url: `/api/v1/ai/providers/${p.id}`, payload: { enabled: false } });
+    }
+
+    const res = await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/patches/${patch.id}/self-review` });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("404s for self-review routes on an unknown patch or project", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      payload: { name: "self-review-404-fixture", rootPath: repoRoot },
+    });
+    const { project } = createRes.json();
+    const unknownId = "00000000-0000-0000-0000-000000000000";
+
+    const getRes = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/patches/${unknownId}/self-review` });
+    expect(getRes.statusCode).toBe(404);
+
+    const postRes = await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/patches/${unknownId}/self-review` });
+    expect(postRes.statusCode).toBe(404);
+  });
+
   // --- Phase 19: AI test generation ----------------------------------------
 
   const GOOD_TEST_RESPONSE =
@@ -1650,5 +1779,124 @@ describe("projects API", () => {
 
     const writeRes = await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/generated-tests/${unknownId}/write-and-run` });
     expect(writeRes.statusCode).toBe(404);
+  });
+
+  async function setUpFailedTestRun(): Promise<{ project: any; run: any }> {
+    // A real "test" script that exits non-zero — runTests() (Phase 9) is a
+    // real subprocess execution, not a mock, so the resulting test_run row
+    // is a genuine 'failed' status this diagnose route can act on.
+    writeFile(
+      repoRoot,
+      "package.json",
+      JSON.stringify({ scripts: { test: "node -e \"console.error('FAIL src/a.test.ts'); console.error('AssertionError: expected 3 but got -1'); process.exit(1)\"" } })
+    );
+    writeFile(repoRoot, "src/a.ts", "export function add(a, b) { return a - b; }\n");
+    writeFile(repoRoot, "src/a.test.ts", "import { add } from './a.js';\ntest('adds', () => add(1, 2));\n");
+
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      payload: { name: "diagnose-fixture-" + randomUUID(), rootPath: repoRoot },
+    });
+    const { project } = createRes.json();
+    await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/discover` });
+    await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/index` });
+
+    const runRes = await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/tests/run` });
+    expect(runRes.statusCode).toBe(200);
+    const { run } = runRes.json();
+    expect(run.status).toBe("failed");
+
+    return { project, run };
+  }
+
+  it("GET diagnosis returns null before any diagnosis has been generated", async () => {
+    const { project, run } = await setUpFailedTestRun();
+
+    const res = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/tests/${run.id}/diagnosis` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().diagnosis).toBeNull();
+  });
+
+  it("refuses to diagnose a run that isn't 'failed'", async () => {
+    writeFile(repoRoot, "package.json", JSON.stringify({ scripts: { test: "node -e \"console.log('ok')\"" } }));
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      payload: { name: "diagnose-passed-fixture-" + randomUUID(), rootPath: repoRoot },
+    });
+    const { project } = createRes.json();
+    await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/discover` });
+    await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/index` });
+    const runRes = await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/tests/run` });
+    const { run } = runRes.json();
+    expect(run.status).toBe("passed");
+
+    const res = await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/tests/${run.id}/diagnose` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/status is 'passed'/);
+  });
+
+  it("refuses to diagnose without an enabled AI provider", async () => {
+    const { project, run } = await setUpFailedTestRun();
+
+    const res = await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/tests/${run.id}/diagnose` });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("diagnoses a real failed run end to end, then serves the stored diagnosis on GET", async () => {
+    const { project, run } = await setUpFailedTestRun();
+
+    const { url: genUrl, close: closeGen } = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          model: "gpt-test",
+          choices: [
+            {
+              message: {
+                content:
+                  "LIKELY_CAUSE:\nadd() subtracts instead of adding.\n\nEVIDENCE:\n- expected 3 but got -1\n\nSUGGESTED_DIRECTION:\nFix the operator in add().",
+              },
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        })
+      );
+    });
+    const providerRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/ai/providers",
+      payload: { name: "Diagnose Provider", kind: "openai-compatible", baseUrl: genUrl, model: "gpt-test" },
+    });
+    await app.inject({ method: "PATCH", url: `/api/v1/ai/providers/${providerRes.json().provider.id}`, payload: { enabled: true } });
+
+    const diagnoseRes = await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/tests/${run.id}/diagnose` });
+    await closeGen();
+    expect(diagnoseRes.statusCode).toBe(200);
+    const body = diagnoseRes.json();
+    expect(body.diagnosis.likelyCause).toBe("add() subtracts instead of adding.");
+    expect(body.diagnosis.evidence).toEqual(["expected 3 but got -1"]);
+    expect(body.contextBundle.selected.map((s: any) => s.path)).toContain("(test run output)");
+
+    const getRes = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/tests/${run.id}/diagnosis` });
+    expect(getRes.statusCode).toBe(200);
+    expect(getRes.json().diagnosis.likelyCause).toBe("add() subtracts instead of adding.");
+    expect(getRes.json().provider).toBe("openai-compatible");
+  });
+
+  it("404s for an unknown project or test run on the diagnose routes", async () => {
+    const { project } = await setUpFailedTestRun();
+    const unknownId = "00000000-0000-0000-0000-000000000000";
+
+    const getRes = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/tests/${unknownId}/diagnosis` });
+    expect(getRes.statusCode).toBe(404);
+
+    const postRes = await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/tests/${unknownId}/diagnose` });
+    expect(postRes.statusCode).toBe(404);
+
+    const wrongProjectRes = await app.inject({ method: "GET", url: `/api/v1/projects/${unknownId}/tests/${unknownId}/diagnosis` });
+    expect(wrongProjectRes.statusCode).toBe(404);
   });
 });

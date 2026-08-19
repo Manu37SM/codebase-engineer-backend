@@ -1,10 +1,21 @@
 import Fastify, { FastifyInstance } from "fastify";
+import fastifyStatic from "@fastify/static";
 import type { DB } from "./db/index.js";
 import { registerProjectsRoutes } from "./routes/projects.js";
 import { registerAiProviderRoutes } from "./routes/aiProviders.js";
+import { registerBillingRoutes } from "./routes/billing.js";
 
 export interface BuildAppOptions {
   db: DB;
+  /**
+   * Phase 24 packaging: when set to a real directory containing a built
+   * frontend (`index.html` + assets), the backend also serves it — a
+   * single process on a single port instead of a separate frontend dev
+   * server. `undefined`/`null` (the default, and what every pre-Phase-24
+   * test still passes) leaves the app exactly as API-only as it's always
+   * been; this is purely additive.
+   */
+  staticDir?: string | null;
 }
 
 /**
@@ -30,6 +41,34 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
 
   registerProjectsRoutes(app, { db: opts.db });
   registerAiProviderRoutes(app, { db: opts.db });
+  registerBillingRoutes(app, { db: opts.db });
+
+  if (opts.staticDir) {
+    // @fastify/static handles path-traversal safety internally for every
+    // request under `root` — the same principle docs/SECURITY.md §2
+    // requires of this product's own project-file access, just enforced
+    // by a well-audited upstream plugin rather than reimplemented here.
+    app.register(fastifyStatic, { root: opts.staticDir });
+
+    // SPA fallback: a client-side route like `/findings` has no matching
+    // static file or API route, so without this it would 404 on a direct
+    // load/refresh. Only applies to GET/HEAD requests for paths that
+    // aren't `/api/*` — an unmatched API route must still 404 as JSON
+    // (never silently served the frontend's index.html, which would turn
+    // a real "route doesn't exist" bug into a confusing blank page
+    // instead of a clear error), and a non-GET request to an unknown path
+    // has no business getting HTML back either.
+    app.setNotFoundHandler((request, reply) => {
+      const url = request.raw.url ?? "";
+      const isApiRequest = url.startsWith("/api/");
+      const isPageLoad = request.method === "GET" || request.method === "HEAD";
+      if (isApiRequest || !isPageLoad) {
+        reply.code(404).send({ error: "Not found" });
+        return;
+      }
+      reply.sendFile("index.html");
+    });
+  }
 
   return app;
 }

@@ -28,17 +28,33 @@ export interface ContextBundle {
 }
 
 /**
- * Only a `Finding` target is implemented so far — the failed-`TestRun` and
- * free-form refactor-request targets named in docs/AI_MODE.md §3 are
- * deferred, honestly, rather than given a half-built selection strategy
- * with nothing real to test it against (neither has a consuming AI-Mode
- * feature yet either — those are Phase 19+/16+).
+ * A `Finding` target and a failed-`TestRun` target are implemented (Phase
+ * 13 and Phase 20, respectively — see `selectContextForTestFailure.ts`).
+ * The free-form refactor-request target named in docs/AI_MODE.md §3
+ * remains deferred, honestly, rather than given a half-built selection
+ * strategy with nothing real to test it against (no consuming AI-Mode
+ * feature exists for it yet).
  */
 export interface FindingTarget {
   id: string;
   filePath: string;
   lineStart: number | null;
   lineEnd: number | null;
+}
+
+/**
+ * A failed `TestRun` target (Phase 20). Unlike a `Finding`, there's no
+ * single file/line the failure is "at" — the relevant context has to be
+ * inferred from the captured output itself (which files it mentions,
+ * which stack frames it prints), so `selectContextForTestFailure` takes
+ * the run's own stdout/stderr rather than a file/line pointer.
+ */
+export interface TestFailureTarget {
+  id: string;
+  command: string | null;
+  framework: string | null;
+  stdout: string;
+  stderr: string;
 }
 
 export interface FileForSelection {
