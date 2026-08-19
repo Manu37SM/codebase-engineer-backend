@@ -63,6 +63,36 @@ export function listPatchesForFinding(db: DB, findingId: string): PatchRecord[] 
     .all(findingId) as PatchRecord[];
 }
 
+export interface PatchWithFindingContext extends PatchRecord {
+  findingRuleId: string | null;
+  findingFilePath: string | null;
+  findingSeverity: string | null;
+}
+
+/**
+ * Every patch for a project, across all findings — the real query behind
+ * the Changes page (a unified review queue), as opposed to
+ * `listPatchesForFinding` above, which only every existed scoped to a
+ * single finding (the Findings page's inline per-finding patch list).
+ * Left-joins `finding` (not an inner join) since a patch's finding can in
+ * principle have been deleted independently — a patch should still show
+ * up for review rather than silently vanishing from the queue.
+ */
+export function listPatchesForProject(db: DB, projectId: string): PatchWithFindingContext[] {
+  return db
+    .prepare(
+      `SELECT patch.*,
+              finding.rule_id AS findingRuleId,
+              finding.file_path AS findingFilePath,
+              finding.severity AS findingSeverity
+       FROM patch
+       LEFT JOIN finding ON finding.id = patch.finding_id
+       WHERE patch.project_id = ?
+       ORDER BY patch.created_at DESC, patch.rowid DESC`
+    )
+    .all(projectId) as PatchWithFindingContext[];
+}
+
 export function updatePatchStatus(db: DB, id: string, status: string): void {
   db.prepare("UPDATE patch SET status = ? WHERE id = ?").run(status, id);
 }

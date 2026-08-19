@@ -1,7 +1,19 @@
+import "dotenv/config";
 import { loadConfig } from "./config.js";
 import { openDatabase } from "./db/index.js";
 import { buildApp } from "./app.js";
 
+// `dotenv/config` (imported above, before anything else) loads a `.env`
+// file from the current working directory into `process.env` if one
+// exists — silently a no-op if it doesn't, so this has zero effect on any
+// existing deployment that sets real environment variables directly
+// (systemd, Docker, PowerShell `$env:`, etc.), and just makes local
+// development more convenient. This must be the first import in the file:
+// `config.ts` and `billing/config.ts` both read `process.env` at call
+// time, so `.env` has to be loaded before `loadConfig()` runs below. See
+// `.env.example` for every variable this server reads, including the
+// optional `RAZORPAY_*` ones (docs/MONETIZATION.md §6 has full setup
+// instructions).
 async function main() {
   const config = loadConfig();
   const db = openDatabase(config.dbPath);

@@ -65,6 +65,32 @@ export function listGeneratedTestsForFinding(db: DB, findingId: string): Generat
     .all(findingId) as GeneratedTestRecord[];
 }
 
+export interface GeneratedTestWithFindingContext extends GeneratedTestRecord {
+  findingRuleId: string | null;
+  findingFilePath: string | null;
+  findingSeverity: string | null;
+}
+
+/**
+ * Every generated test for a project, across all findings — mirrors
+ * `patchRepo.ts`'s `listPatchesForProject`, for the same Changes-page
+ * unified review queue.
+ */
+export function listGeneratedTestsForProject(db: DB, projectId: string): GeneratedTestWithFindingContext[] {
+  return db
+    .prepare(
+      `SELECT generated_test.*,
+              finding.rule_id AS findingRuleId,
+              finding.file_path AS findingFilePath,
+              finding.severity AS findingSeverity
+       FROM generated_test
+       LEFT JOIN finding ON finding.id = generated_test.finding_id
+       WHERE generated_test.project_id = ?
+       ORDER BY generated_test.created_at DESC, generated_test.rowid DESC`
+    )
+    .all(projectId) as GeneratedTestWithFindingContext[];
+}
+
 export function updateGeneratedTestStatus(db: DB, id: string, status: string): void {
   db.prepare("UPDATE generated_test SET status = ? WHERE id = ?").run(status, id);
 }

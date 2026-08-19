@@ -285,6 +285,39 @@ describe("projects API", () => {
     expect(listAfter.json().total).toBe(0);
   });
 
+  it("snapshots real per-severity counts onto each analysis run, and lists run history oldest first", async () => {
+    writeFile(repoRoot, "src/config.ts", `const apiKey = "sk_live_ABCDEFGHIJKLMNOPQRSTUV";\n`);
+
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      payload: { name: "severity-history-fixture", rootPath: repoRoot },
+    });
+    const { project } = createRes.json();
+
+    await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/analysis` });
+
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    fs.rmSync(path.join(repoRoot, "src/config.ts"));
+    await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/analysis` });
+
+    const historyRes = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/analysis/history` });
+    expect(historyRes.statusCode).toBe(200);
+    const { runs } = historyRes.json();
+    expect(runs.length).toBe(2);
+
+    // Oldest first.
+    expect(new Date(runs[0].started_at).getTime()).toBeLessThanOrEqual(new Date(runs[1].started_at).getTime());
+
+    // First run had the hardcoded secret -> at least one high-severity finding, a real (non-null) count.
+    expect(runs[0].high_count).toBeGreaterThan(0);
+    expect(typeof runs[0].critical_count).toBe("number");
+
+    // Second run (secret removed) has a real, honestly-zero high count — not null, since the run genuinely completed and counted zero.
+    expect(runs[1].high_count).toBe(0);
+  });
+
   it("returns 404 for findings/analysis on an unknown project", async () => {
     const analysisRes = await app.inject({
       method: "POST",
@@ -1898,5 +1931,61 @@ describe("projects API", () => {
 
     const wrongProjectRes = await app.inject({ method: "GET", url: `/api/v1/projects/${unknownId}/tests/${unknownId}/diagnosis` });
     expect(wrongProjectRes.statusCode).toBe(404);
+  });
+
+  describe("GET /projects/:id/changes — unified review queue", () => {
+    it("returns every patch and generated test for a project, with finding context, regardless of which finding produced them", async () => {
+      const { project, finding } = await setUpFindingWithFixPlan();
+
+      const patchRes = await app.inject({
+        method: "POST",
+        url: `/api/v1/projects/${project.id}/findings/${finding.id}/patches`,
+      });
+      expect(patchRes.statusCode).toBe(201);
+      const patch = patchRes.json().patch;
+
+      const testRes = await app.inject({
+        method: "POST",
+        url: `/api/v1/projects/${project.id}/findings/${finding.id}/generated-tests`,
+        payload: { description: "Regression test for the secret" },
+      });
+      expect(testRes.statusCode).toBe(201);
+      const generatedTest = testRes.json().generatedTest;
+
+      const changesRes = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/changes` });
+      expect(changesRes.statusCode).toBe(200);
+      const body = changesRes.json();
+
+      const foundPatch = body.patches.find((p: { id: string }) => p.id === patch.id);
+      expect(foundPatch).toBeTruthy();
+      expect(foundPatch.status).toBe("pending_approval");
+      expect(foundPatch.findingRuleId).toBe("hardcoded-secret");
+      expect(foundPatch.findingFilePath).toBeTruthy();
+      expect(foundPatch.findingSeverity).toBe("high");
+
+      const foundTest = body.generatedTests.find((t: { id: string }) => t.id === generatedTest.id);
+      expect(foundTest).toBeTruthy();
+      expect(foundTest.status).toBe("pending_approval");
+      expect(foundTest.findingRuleId).toBe("hardcoded-secret");
+    });
+
+    it("returns an empty queue (not an error) for a project with no patches or generated tests yet", async () => {
+      const createRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/projects",
+        payload: { name: "empty-changes-fixture", rootPath: repoRoot },
+      });
+      const { project } = createRes.json();
+
+      const res = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/changes` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ patches: [], generatedTests: [] });
+    });
+
+    it("404s for an unknown project", async () => {
+      const unknownId = "00000000-0000-0000-0000-000000000000";
+      const res = await app.inject({ method: "GET", url: `/api/v1/projects/${unknownId}/changes` });
+      expect(res.statusCode).toBe(404);
+    });
   });
 });

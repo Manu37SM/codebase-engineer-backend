@@ -8,9 +8,10 @@ export interface TestRunRecord {
   command: string | null;
   exit_code: number | null;
   duration_ms: number | null;
-  passed: number;
-  failed: number;
-  skipped: number;
+  /** null means "ran, but this framework's output couldn't be parsed for counts" — never fabricated as 0. */
+  passed: number | null;
+  failed: number | null;
+  skipped: number | null;
   stdout_ref: string | null;
   stderr_ref: string | null;
   status: string;
@@ -43,9 +44,9 @@ export function saveTestRun(
     outcome.command,
     outcome.exitCode,
     outcome.durationMs,
-    outcome.passed ?? 0,
-    outcome.failed ?? 0,
-    outcome.skipped ?? 0,
+    outcome.passed,
+    outcome.failed,
+    outcome.skipped,
     outcome.stdout,
     outcome.stderr,
     status,

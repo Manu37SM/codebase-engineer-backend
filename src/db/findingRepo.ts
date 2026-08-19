@@ -24,6 +24,17 @@ export interface AnalysisRunRecord {
   finished_at: string | null;
   status: string;
   findings_count: number;
+  /**
+   * Severity-count snapshot taken the moment this run finished (migration
+   * 013). Null on every run that predates that migration, and on any
+   * "failed" run — never fabricated as 0. See the migration's doc comment
+   * for why this can't be reconstructed after the fact from `finding`
+   * directly.
+   */
+  critical_count: number | null;
+  high_count: number | null;
+  medium_count: number | null;
+  low_count: number | null;
 }
 
 /**
@@ -155,19 +166,58 @@ export function createAnalysisRun(db: DB, id: string, projectId: string): Analys
   return db.prepare("SELECT * FROM analysis_run WHERE id = ?").get(id) as AnalysisRunRecord;
 }
 
+/**
+ * `severityCounts` is the real per-severity breakdown of the findings this
+ * run actually produced, snapshotted at the moment the run finishes
+ * (migration 013) — omitted (left NULL) for a "failed" run, since a failed
+ * run has no real finding set to count.
+ */
 export function finishAnalysisRun(
   db: DB,
   id: string,
   status: "completed" | "failed",
-  findingsCount: number
+  findingsCount: number,
+  severityCounts?: { critical: number; high: number; medium: number; low: number }
 ): void {
   db.prepare(
-    "UPDATE analysis_run SET finished_at = datetime('now'), status = ?, findings_count = ? WHERE id = ?"
-  ).run(status, findingsCount, id);
+    `UPDATE analysis_run
+     SET finished_at = datetime('now'), status = ?, findings_count = ?,
+         critical_count = ?, high_count = ?, medium_count = ?, low_count = ?
+     WHERE id = ?`
+  ).run(
+    status,
+    findingsCount,
+    severityCounts?.critical ?? null,
+    severityCounts?.high ?? null,
+    severityCounts?.medium ?? null,
+    severityCounts?.low ?? null,
+    id
+  );
 }
 
 export function getLatestAnalysisRun(db: DB, projectId: string): AnalysisRunRecord | undefined {
   return db
     .prepare("SELECT * FROM analysis_run WHERE project_id = ? ORDER BY started_at DESC LIMIT 1")
     .get(projectId) as AnalysisRunRecord | undefined;
+}
+
+/**
+ * Full analysis-run history for a project, oldest first — the real query
+ * behind the findings-trend-over-time chart. Capped at the most recent 100
+ * runs (oldest first within that window) so a project with years of daily
+ * runs doesn't return an unbounded response; 100 is generous for a trend
+ * line and easy to raise later if it's ever actually hit.
+ */
+export function listAnalysisRuns(db: DB, projectId: string): AnalysisRunRecord[] {
+  // Tie-broken by rowid, not just started_at: `started_at` has only
+  // second-level resolution (SQLite `datetime('now')`), so two runs
+  // kicked off within the same second — entirely realistic in a test, or
+  // for a user clicking "Run Analysis" twice quickly — would otherwise
+  // sort in an unstable, arbitrary order relative to each other.
+  const rows = db
+    .prepare(
+      `SELECT * FROM analysis_run WHERE project_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 100`
+    )
+    .all(projectId) as AnalysisRunRecord[];
+  return rows.reverse();
 }

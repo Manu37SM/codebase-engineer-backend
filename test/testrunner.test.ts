@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { detectTestCommand } from "../src/testrunner/detect.js";
 import { runTests } from "../src/testrunner/run.js";
-import { parseVitestOutput, parseMavenOutput } from "../src/testrunner/parse.js";
+import { parseVitestOutput, parseMavenOutput, parseNodeTestOutput } from "../src/testrunner/parse.js";
 import { makeTempRepo, writeFile, cleanupRepo } from "./fixtures.js";
 
 describe("detectTestCommand", () => {
@@ -38,6 +38,27 @@ describe("detectTestCommand", () => {
     const result = detectTestCommand(root);
     expect(result.supported).toBe(true);
     expect(result.framework).toBe("npm-script");
+  });
+
+  it("detects Node's built-in test runner from a `node --test` script", () => {
+    root = makeTempRepo();
+    writeFile(root, "package.json", JSON.stringify({ scripts: { test: "node --test" } }));
+
+    const result = detectTestCommand(root);
+    expect(result.supported).toBe(true);
+    expect(result.framework).toBe("node-test");
+  });
+
+  it("detects `node --test` even with extra flags/paths around it", () => {
+    root = makeTempRepo();
+    writeFile(
+      root,
+      "package.json",
+      JSON.stringify({ scripts: { test: "node --experimental-test-coverage --test test/**/*.js" } })
+    );
+
+    const result = detectTestCommand(root);
+    expect(result.framework).toBe("node-test");
   });
 
   it("prefers the detected lockfile's package manager", () => {
@@ -152,6 +173,39 @@ describe("parseMavenOutput", () => {
   });
 });
 
+describe("parseNodeTestOutput", () => {
+  it("parses a real `node --test` TAP summary block (captured from a real run)", () => {
+    // Captured verbatim from a real `node --test` invocation against a
+    // 3-test file (2 passing, 1 failing) — not hand-written from memory.
+    const output = [
+      "1..3",
+      "# tests 3",
+      "# suites 0",
+      "# pass 2",
+      "# fail 1",
+      "# cancelled 0",
+      "# skipped 0",
+      "# todo 0",
+      "# duration_ms 192.178393",
+      "",
+    ].join("\n");
+    expect(parseNodeTestOutput(output)).toEqual({ passed: 2, failed: 1, skipped: 0 });
+  });
+
+  it("counts cancelled tests as failed", () => {
+    const output = ["# pass 4", "# fail 0", "# cancelled 1", "# skipped 0"].join("\n");
+    expect(parseNodeTestOutput(output)).toEqual({ passed: 4, failed: 1, skipped: 0 });
+  });
+
+  it("returns null counts when no summary block is found", () => {
+    expect(parseNodeTestOutput("some unrelated output\n")).toEqual({
+      passed: null,
+      failed: null,
+      skipped: null,
+    });
+  });
+});
+
 describe("runTests — real process execution", () => {
   let root: string;
   afterEach(() => root && cleanupRepo(root));
@@ -181,6 +235,34 @@ describe("runTests — real process execution", () => {
     expect(outcome.stdout).toContain("hello from test");
     // Framework is generic npm-script — counts are honestly unknown, not fabricated.
     expect(outcome.passed).toBeNull();
+  });
+
+  it("actually runs `node --test` and captures real pass/fail counts, not fabricated zeros", async () => {
+    root = makeTempRepo();
+    writeFile(
+      root,
+      "package.json",
+      JSON.stringify({ scripts: { test: "node --test" } })
+    );
+    writeFile(
+      root,
+      "sample.test.js",
+      [
+        "const test = require('node:test');",
+        "const assert = require('node:assert');",
+        "test('passes', () => { assert.ok(true); });",
+        "test('also passes', () => { assert.ok(true); });",
+        "test('fails', () => { assert.ok(false); });",
+      ].join("\n")
+    );
+
+    const outcome = await runTests(root);
+    expect(outcome.supported).toBe(true);
+    expect(outcome.framework).toBe("node-test");
+    expect(outcome.exitCode).not.toBe(0); // one real failing test
+    expect(outcome.passed).toBe(2);
+    expect(outcome.failed).toBe(1);
+    expect(outcome.skipped).toBe(0);
   });
 
   it("actually runs a failing npm test script and reports a non-zero exit code", async () => {

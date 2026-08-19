@@ -115,7 +115,7 @@ export function buildAuditMarkdown(report: AuditReport): string {
     const t = report.latestTestRun;
     push(`- Status: ${t.status}${t.reason ? ` (${t.reason})` : ""}`);
     push(`- Framework: ${t.framework ?? "unknown"}`);
-    push(`- Passed: ${t.passed}, Failed: ${t.failed}, Skipped: ${t.skipped}`);
+    push(`- Passed: ${t.passed ?? "unknown"}, Failed: ${t.failed ?? "unknown"}, Skipped: ${t.skipped ?? "unknown"}`);
     push(`- Run at: ${t.started_at}`);
   }
   push();

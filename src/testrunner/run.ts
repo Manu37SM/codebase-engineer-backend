@@ -1,6 +1,6 @@
 import spawn from "cross-spawn";
 import { detectTestCommand, type TestCommandDetection } from "./detect.js";
-import { parseVitestOutput, parseMavenOutput, type TestCounts } from "./parse.js";
+import { parseVitestOutput, parseMavenOutput, parseNodeTestOutput, type TestCounts } from "./parse.js";
 
 const MAX_OUTPUT_BYTES = 5 * 1024 * 1024; // 5MB captured stdout/stderr cap
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes — tests can legitimately be slow
@@ -211,5 +211,6 @@ function killProcessTree(pid: number): void {
 function parseCounts(framework: string | null, combinedOutput: string): TestCounts {
   if (framework === "vitest") return parseVitestOutput(combinedOutput);
   if (framework === "maven") return parseMavenOutput(combinedOutput);
+  if (framework === "node-test") return parseNodeTestOutput(combinedOutput);
   return { passed: null, failed: null, skipped: null }; // unknown format — don't fabricate
 }

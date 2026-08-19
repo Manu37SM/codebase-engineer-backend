@@ -83,3 +83,40 @@ function matchCount(line: string, label: string): number | null {
   const match = line.match(new RegExp(`(\\d+)\\s+${label}\\b`));
   return match ? Number(match[1]) : null;
 }
+
+/**
+ * Parses Node's built-in test runner's (`node --test`) TAP-diagnostic
+ * summary, printed at the end of a run regardless of reporter, e.g.:
+ *   # tests 5
+ *   # suites 0
+ *   # pass 4
+ *   # fail 1
+ *   # cancelled 0
+ *   # skipped 0
+ *   # todo 0
+ *   # duration_ms 12.345
+ * "cancelled" tests (e.g. ones that hit a timeout) are counted as failed —
+ * a cancelled test did not pass, the same treatment Maven's Surefire
+ * parser above gives "Errors". Returns null counts (not zeros) when the
+ * summary block isn't found — same "unknown, not zero" contract as the
+ * other two parsers.
+ */
+export function parseNodeTestOutput(rawOutput: string): TestCounts {
+  const output = stripAnsi(rawOutput);
+  const pass = matchTapCount(output, "pass");
+  const fail = matchTapCount(output, "fail");
+  const cancelled = matchTapCount(output, "cancelled");
+  const skipped = matchTapCount(output, "skipped");
+
+  if (pass === null && fail === null && cancelled === null && skipped === null) return NO_COUNTS;
+  return {
+    passed: pass ?? 0,
+    failed: (fail ?? 0) + (cancelled ?? 0),
+    skipped: skipped ?? 0,
+  };
+}
+
+function matchTapCount(output: string, label: string): number | null {
+  const match = output.match(new RegExp(`^#\\s*${label}\\s+(\\d+)\\s*$`, "m"));
+  return match ? Number(match[1]) : null;
+}

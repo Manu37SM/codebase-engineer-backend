@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { detectPackageManagers } from "../discovery/packageManager.js";
 
-export type TestFramework = "vitest" | "npm-script" | "maven";
+export type TestFramework = "vitest" | "node-test" | "npm-script" | "maven";
 
 export interface TestCommandDetection {
   supported: boolean;
@@ -64,6 +64,10 @@ export function detectTestCommand(root: string): TestCommandDetection {
     }
 
     const hasVitest = Boolean(pkg.dependencies?.vitest || pkg.devDependencies?.vitest);
+    // Node's own built-in test runner (`node --test`) needs no declared
+    // dependency — it ships with Node itself — so it can only be detected
+    // from the test script's own invocation, unlike vitest above.
+    const usesNodeTestRunner = /\bnode\b[^&|;]*--test\b/.test(testScript);
     const managers = detectPackageManagers(root);
     const manager = managers[0] ?? "npm";
     const command = manager; // "npm" | "pnpm" | "yarn" are all valid executables
@@ -71,7 +75,7 @@ export function detectTestCommand(root: string): TestCommandDetection {
 
     return {
       supported: true,
-      framework: hasVitest ? "vitest" : "npm-script",
+      framework: hasVitest ? "vitest" : usesNodeTestRunner ? "node-test" : "npm-script",
       command,
       args,
     };

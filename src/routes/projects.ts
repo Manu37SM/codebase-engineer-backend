@@ -22,6 +22,7 @@ import {
   createAnalysisRun,
   finishAnalysisRun,
   getLatestAnalysisRun,
+  listAnalysisRuns,
   getFindingById,
 } from "../db/findingRepo.js";
 import { analyzeGit } from "../git/index.js";
@@ -45,6 +46,7 @@ import {
   createPatchReview,
   getPatchById,
   listPatchesForFinding,
+  listPatchesForProject,
   setPatchApplyResult,
   setPatchDiff,
   updatePatchStatus,
@@ -64,6 +66,7 @@ import {
   createGeneratedTestReview,
   getGeneratedTestById,
   listGeneratedTestsForFinding,
+  listGeneratedTestsForProject,
   setGeneratedTestContent,
   setGeneratedTestRunResult,
   updateGeneratedTestStatus,
@@ -276,7 +279,13 @@ export function registerProjectsRoutes(
     }
 
     replaceProjectFindings(db, id, result.findings, randomUUID);
-    finishAnalysisRun(db, runId, "completed", result.findings.length);
+    const severityCounts = { critical: 0, high: 0, medium: 0, low: 0 };
+    for (const f of result.findings) {
+      if (f.severity in severityCounts) {
+        severityCounts[f.severity as keyof typeof severityCounts]++;
+      }
+    }
+    finishAnalysisRun(db, runId, "completed", result.findings.length, severityCounts);
 
     return reply.status(200).send({
       run: { ...run, status: "completed", findings_count: result.findings.length },
@@ -308,6 +317,20 @@ export function registerProjectsRoutes(
     const latestRun = getLatestAnalysisRun(db, id);
 
     return reply.status(200).send({ findings, total, latestRun: latestRun ?? null });
+  });
+
+  /**
+   * Analysis-run history, oldest first — real data behind the Dashboard's
+   * findings-trend-over-time chart. Runs from before migration 013 (or any
+   * failed run) carry `null` severity counts; the frontend renders those
+   * points as gaps rather than a fabricated zero.
+   */
+  app.get("/api/v1/projects/:id/analysis/history", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    return reply.status(200).send({ runs: listAnalysisRuns(db, id) });
   });
 
   const DEFAULT_CONTEXT_BUDGET_TOKENS = 4000;
@@ -1564,5 +1587,31 @@ export function registerProjectsRoutes(
       .header("Content-Type", "text/markdown; charset=utf-8")
       .header("Content-Disposition", `attachment; filename="${filename}"`)
       .send(markdown);
+  });
+
+  // --- Changes (unified review queue) --------------------------------
+  //
+  // Everything above this point that touches `patch`/`generated_test` is
+  // scoped to a single finding (`listPatchesForFinding` etc.) — the right
+  // shape for the Findings page's inline per-finding review UI. The
+  // Changes page needs the opposite: every patch and generated test for
+  // the *whole project*, regardless of which finding produced it, so a
+  // reviewer can work through one queue instead of hunting through every
+  // finding for anything left pending. `listPatchesForProject` /
+  // `listGeneratedTestsForProject` (added alongside this route) already do
+  // that aggregation at the SQL layer; this route just returns both lists
+  // together under one response so the frontend can render one page. All
+  // the existing per-item approve/reject/generate/apply routes above are
+  // reused as-is for taking action on any item this route lists — this is
+  // read-only, a queue view, not a new mutation surface.
+  app.get("/api/v1/projects/:id/changes", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    return reply.status(200).send({
+      patches: listPatchesForProject(db, id),
+      generatedTests: listGeneratedTestsForProject(db, id),
+    });
   });
 }

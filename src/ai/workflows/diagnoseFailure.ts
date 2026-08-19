@@ -176,7 +176,7 @@ function testRunSummary(testRun: TestRunRecord): string {
     `Framework: ${testRun.framework ?? "unknown"}`,
     `Command: ${testRun.command ?? "unknown"}`,
     `Exit code: ${testRun.exit_code ?? "null"}`,
-    `Passed: ${testRun.passed}, Failed: ${testRun.failed}, Skipped: ${testRun.skipped}`,
+    `Passed: ${testRun.passed ?? "unknown"}, Failed: ${testRun.failed ?? "unknown"}, Skipped: ${testRun.skipped ?? "unknown"}`,
   ].join("\n");
 }
 
