@@ -8,6 +8,7 @@ import { buildApp } from "../src/app.js";
 import { hashPassword, verifyPassword } from "../src/auth/password.js";
 import { encryptToken, decryptToken } from "../src/auth/crypto.js";
 import { verifyTurnstile } from "../src/auth/turnstile.js";
+import { __resetAllRateLimitsForTests } from "../src/auth/rateLimit.js";
 
 const AUTH_ENV_KEYS = ["AUTH_TOKEN_ENCRYPTION_KEY", "TURNSTILE_SECRET_KEY"] as const;
 
@@ -93,6 +94,12 @@ describe("auth API", () => {
     tmpDbDir = fs.mkdtempSync(path.join(os.tmpdir(), "ce-auth-test-"));
     db = openDatabase(path.join(tmpDbDir, "test.db"));
     app = buildApp({ db });
+    // The login/register rate limiter (auth/rateLimit.ts) is a
+    // module-level in-memory counter keyed by IP — every `app.inject()`
+    // call in this file shares the same simulated IP, so without a reset
+    // between tests, this describe block's own many real login/register
+    // calls would trip the limiter partway through the suite.
+    __resetAllRateLimitsForTests();
   });
 
   afterEach(() => {
@@ -308,5 +315,90 @@ describe("auth API", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ google: false, github: false });
     expect(JSON.stringify(res.json())).not.toMatch(/secret|client/i);
+  });
+
+  it("rate-limits repeated failed login attempts from the same caller (brute-force protection)", async () => {
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/register",
+      payload: { email: "throttled@example.com", password: "the-real-password-123" },
+    });
+
+    // The limiter allows 10 attempts per window — exhaust it with wrong
+    // passwords, each a real request through the real route.
+    let lastRes;
+    for (let i = 0; i < 10; i++) {
+      lastRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: { email: "throttled@example.com", password: "wrong-password" },
+      });
+      expect(lastRes.statusCode).toBe(401);
+    }
+
+    // The 11th attempt — even with the CORRECT password — is throttled,
+    // not authenticated: the limiter counts attempts, not failures.
+    const throttledRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "throttled@example.com", password: "the-real-password-123" },
+    });
+    expect(throttledRes.statusCode).toBe(429);
+    expect(throttledRes.headers["retry-after"]).toBeTruthy();
+  });
+
+  it("rate-limits repeated registration attempts from the same caller", async () => {
+    let lastRes;
+    for (let i = 0; i < 10; i++) {
+      lastRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/auth/register",
+        payload: { email: `flood-${i}@example.com`, password: "a-real-password-123" },
+      });
+      expect(lastRes.statusCode).toBe(201);
+    }
+
+    const throttledRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/register",
+      payload: { email: "flood-11@example.com", password: "a-real-password-123" },
+    });
+    expect(throttledRes.statusCode).toBe(429);
+  });
+
+  it("clears the login rate limit on a genuine successful login, so a real user isn't punished afterward", async () => {
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/register",
+      payload: { email: "recovers@example.com", password: "a-real-password-123" },
+    });
+
+    // A few mistyped attempts, well under the limit...
+    for (let i = 0; i < 3; i++) {
+      await app.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: { email: "recovers@example.com", password: "wrong-password" },
+      });
+    }
+
+    // ...then a real successful login...
+    const successRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "recovers@example.com", password: "a-real-password-123" },
+    });
+    expect(successRes.statusCode).toBe(200);
+
+    // ...and the counter is back to zero, so this user has their full 10
+    // attempts available again rather than being left at "7 remaining".
+    for (let i = 0; i < 10; i++) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: { email: "recovers@example.com", password: "wrong-password" },
+      });
+      expect(res.statusCode).toBe(401); // not 429 — the window is fresh
+    }
   });
 });

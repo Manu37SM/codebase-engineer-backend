@@ -12,6 +12,7 @@ import { registerGitHubOAuthRoutes } from "./routes/oauthGithub.js";
 import { registerGitHubRepoRoutes } from "./routes/githubRepos.js";
 import { registerGoogleDriveRoutes } from "./routes/googleDrive.js";
 import { authGuard } from "./auth/guard.js";
+import { registerSecurityHeaders } from "./security/headers.js";
 
 export interface BuildAppOptions {
   db: DB;
@@ -52,6 +53,11 @@ export interface BuildAppOptions {
 export function buildApp(opts: BuildAppOptions): FastifyInstance {
   const app = Fastify({ logger: false, trustProxy: opts.trustProxy ?? false });
   app.register(fastifyCookie);
+
+  // Baseline security headers (CSP, X-Frame-Options, HSTS, etc.) on every
+  // response, including error responses — see security/headers.ts for the
+  // full rationale. Registered before auth/routes so it's never skipped.
+  registerSecurityHeaders(app);
 
   // Single choke point for auth (Task #91) — see `authGuard`'s own doc
   // comment for exactly which paths it leaves alone and why. Registered

@@ -16,6 +16,19 @@ import { verifyTurnstile } from "../auth/turnstile.js";
 import { SESSION_COOKIE_NAME } from "../auth/guard.js";
 import { setSessionCookie } from "../auth/session.js";
 import { getGitHubOAuthConfig, getGoogleOAuthConfig } from "../auth/oauthConfig.js";
+import { checkRateLimit, resetRateLimit } from "../auth/rateLimit.js";
+
+// Local-account brute-force protection: bounded, generous enough that a
+// real user fumbling their password a few times never gets blocked, but
+// tight enough that scripted guessing is impractical. Keyed by IP alone
+// (not IP+email) for /login so an attacker can't dodge the limit by
+// cycling through candidate emails from one address; /register gets its
+// own, separate counter so a login lockout can't be triggered by (or
+// block) account creation from the same IP, and vice versa.
+const LOGIN_MAX_ATTEMPTS = 10;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const REGISTER_MAX_ATTEMPTS = 10;
+const REGISTER_WINDOW_MS = 60 * 60 * 1000;
 
 interface RegisterAuthRoutesOptions {
   db: DB;
@@ -35,6 +48,12 @@ interface RegisterAuthRoutesOptions {
  */
 export function registerAuthRoutes(app: FastifyInstance, { db }: RegisterAuthRoutesOptions): void {
   app.post("/api/v1/auth/register", async (request, reply) => {
+    const registerLimit = checkRateLimit(`register:${request.ip}`, REGISTER_MAX_ATTEMPTS, REGISTER_WINDOW_MS);
+    if (!registerLimit.allowed) {
+      reply.header("Retry-After", String(registerLimit.retryAfterSeconds));
+      return reply.status(429).send({ error: "Too many registration attempts. Please try again later." });
+    }
+
     const body = request.body as
       | { email?: string; password?: string; displayName?: string; turnstileToken?: string }
       | undefined;
@@ -70,6 +89,13 @@ export function registerAuthRoutes(app: FastifyInstance, { db }: RegisterAuthRou
   });
 
   app.post("/api/v1/auth/login", async (request, reply) => {
+    const loginKey = `login:${request.ip}`;
+    const loginLimit = checkRateLimit(loginKey, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MS);
+    if (!loginLimit.allowed) {
+      reply.header("Retry-After", String(loginLimit.retryAfterSeconds));
+      return reply.status(429).send({ error: "Too many login attempts. Please try again later." });
+    }
+
     const body = request.body as { email?: string; password?: string; turnstileToken?: string } | undefined;
     const email = body?.email?.trim();
     const password = body?.password;
@@ -90,6 +116,11 @@ export function registerAuthRoutes(app: FastifyInstance, { db }: RegisterAuthRou
     if (!user || !user.password_hash || !verifyPassword(password, user.password_hash)) {
       return reply.status(401).send({ error: "Invalid email or password." });
     }
+
+    // A genuine successful login clears this IP's counter so a real user
+    // who fumbled their password a few times isn't then throttled on
+    // their next legitimate visit.
+    resetRateLimit(loginKey);
 
     const token = createSession(db, randomUUID(), user.id);
     setSessionCookie(request, reply, token);
