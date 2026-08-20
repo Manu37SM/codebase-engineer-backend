@@ -54,6 +54,24 @@ export async function downloadAndExtractZip(url: string, destDir: string): Promi
     );
   }
 
+  extractZipBuffer(buffer, destDir);
+}
+
+/**
+ * Extracts an in-memory zip buffer into `destDir` (which must not already
+ * exist), flattening a single top-level wrapper directory the same way
+ * `downloadAndExtractZip` does. Split out so callers that already have the
+ * archive's bytes some other way (Task #86's Google Drive import
+ * downloads via an authenticated `fetch` with a Bearer token, which
+ * `downloadAndExtractZip`'s own plain unauthenticated `fetch(url)` can't
+ * do) can reuse the exact same extraction/flattening behavior rather than
+ * duplicating it.
+ */
+export function extractZipBuffer(buffer: Buffer, destDir: string): void {
+  if (fs.existsSync(destDir)) {
+    throw new Error(`Destination already exists: ${destDir}`);
+  }
+
   const tmpZipPath = path.join(os.tmpdir(), `ce-import-${Date.now()}-${Math.random().toString(36).slice(2)}.zip`);
   fs.writeFileSync(tmpZipPath, buffer);
 

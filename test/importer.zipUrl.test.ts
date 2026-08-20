@@ -5,7 +5,7 @@ import path from "node:path";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import AdmZip from "adm-zip";
-import { downloadAndExtractZip, ZipDownloadError } from "../src/importer/zipUrl.js";
+import { downloadAndExtractZip, extractZipBuffer, ZipDownloadError } from "../src/importer/zipUrl.js";
 
 function startZipServer(zipBuffer: Buffer): Promise<{ url: string; close: () => Promise<void> }> {
   return new Promise((resolve) => {
@@ -103,5 +103,50 @@ describe("downloadAndExtractZip", () => {
     server = await startZipServer(buildFlatZip());
     destDir = fs.mkdtempSync(path.join(os.tmpdir(), "ce-zip-test-existing-"));
     await expect(downloadAndExtractZip(server.url, destDir)).rejects.toThrow(/already exists/);
+  });
+});
+
+// Task #86: `extractZipBuffer` is the extraction/flattening core that
+// `downloadAndExtractZip` now delegates to, split out so the Google Drive
+// importer (which downloads bytes via an authenticated fetch, not a plain
+// unauthenticated `fetch(url)`) can reuse identical behavior. Covered
+// directly here — in-memory, no HTTP server needed — in addition to the
+// `downloadAndExtractZip` tests above that exercise it indirectly.
+describe("extractZipBuffer", () => {
+  let tmpRoot: string | null = null;
+
+  afterEach(() => {
+    if (tmpRoot) fs.rmSync(tmpRoot, { recursive: true, force: true });
+    tmpRoot = null;
+  });
+
+  it("extracts and flattens a single top-level wrapper directory", () => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ce-extractbuf-test-"));
+    const destDir = path.join(tmpRoot, "extracted");
+    extractZipBuffer(buildWrappedZip(), destDir);
+
+    expect(fs.existsSync(path.join(destDir, "README.md"))).toBe(true);
+    expect(fs.existsSync(path.join(destDir, "src/main.ts"))).toBe(true);
+    expect(fs.existsSync(path.join(destDir, "my-repo-main"))).toBe(false);
+  });
+
+  it("leaves a multi-top-level-entry zip unflattened", () => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ce-extractbuf-test-"));
+    const destDir = path.join(tmpRoot, "extracted");
+    extractZipBuffer(buildFlatZip(), destDir);
+
+    expect(fs.existsSync(path.join(destDir, "README.md"))).toBe(true);
+    expect(fs.existsSync(path.join(destDir, "src/main.ts"))).toBe(true);
+  });
+
+  it("rejects a buffer that isn't actually a zip archive", () => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ce-extractbuf-test-"));
+    const destDir = path.join(tmpRoot, "extracted");
+    expect(() => extractZipBuffer(Buffer.from("not a zip"), destDir)).toThrow(ZipDownloadError);
+  });
+
+  it("refuses to extract into a directory that already exists", () => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ce-extractbuf-test-existing-"));
+    expect(() => extractZipBuffer(buildFlatZip(), tmpRoot)).toThrow(/already exists/);
   });
 });

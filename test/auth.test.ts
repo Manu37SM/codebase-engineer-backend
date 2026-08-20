@@ -165,6 +165,7 @@ describe("auth API", () => {
         displayName: "Alice",
         createdAt: expect.any(String),
         githubConnected: false,
+        driveConnected: false,
       },
     });
   });

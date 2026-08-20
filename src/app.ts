@@ -10,6 +10,7 @@ import { registerAuthRoutes } from "./routes/auth.js";
 import { registerGoogleOAuthRoutes } from "./routes/oauthGoogle.js";
 import { registerGitHubOAuthRoutes } from "./routes/oauthGithub.js";
 import { registerGitHubRepoRoutes } from "./routes/githubRepos.js";
+import { registerGoogleDriveRoutes } from "./routes/googleDrive.js";
 import { authGuard } from "./auth/guard.js";
 
 export interface BuildAppOptions {
@@ -78,6 +79,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
 
   registerProjectsRoutes(app, { db: opts.db, dataDir: opts.dataDir ?? os.tmpdir() });
   registerGitHubRepoRoutes(app, { db: opts.db, dataDir: opts.dataDir ?? os.tmpdir() });
+  registerGoogleDriveRoutes(app, { db: opts.db, dataDir: opts.dataDir ?? os.tmpdir() });
   registerAiProviderRoutes(app, { db: opts.db });
   registerBillingRoutes(app, { db: opts.db });
 

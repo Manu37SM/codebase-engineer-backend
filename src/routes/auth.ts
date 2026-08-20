@@ -128,7 +128,11 @@ export function registerAuthRoutes(app: FastifyInstance, { db }: RegisterAuthRou
     // GitHub repos" without a failed round trip — true only when a GitHub
     // identity with a stored token actually exists for this user.
     const githubConnected = Boolean(getOauthIdentityForUser(db, user.id, "github")?.access_token_enc);
-    return reply.status(200).send({ authRequired, user: { ...publicUser(user), githubConnected } });
+    // Task #86: same idea as githubConnected, for "browse your Google
+    // Drive for a zip to import" — true only when a Google identity with
+    // a stored token actually exists for this user.
+    const driveConnected = Boolean(getOauthIdentityForUser(db, user.id, "google")?.access_token_enc);
+    return reply.status(200).send({ authRequired, user: { ...publicUser(user), githubConnected, driveConnected } });
   });
 
   /**

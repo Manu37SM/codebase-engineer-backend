@@ -21,7 +21,19 @@ interface RegisterGoogleOAuthRoutesOptions {
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo";
-const SCOPES = "openid email profile";
+// Task #86: adds Drive read access so a signed-in user can browse their own
+// Drive for a zip file to import (`routes/googleDrive.ts`). `drive.readonly`
+// is deliberately broader than "just the files this app created"
+// (`drive.file`) because `drive.file` can only see files the app itself
+// created/opened via the picker UI — it cannot list or search a user's
+// *existing* zip files by mimetype, which is exactly what Task #86 needs
+// without pulling in Google's separate client-side Picker JS widget. Same
+// "broad scope is the tradeoff for browsing existing files without a
+// picker widget" reasoning already used for GitHub's `repo` scope
+// (Task #83/#84) — still local-first: the token only ever downloads bytes
+// onto this same machine, nothing is stored or proxied server-side beyond
+// the encrypted token itself.
+const SCOPES = "openid email profile https://www.googleapis.com/auth/drive.readonly";
 
 interface GoogleUserInfo {
   sub: string;
