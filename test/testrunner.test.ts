@@ -400,7 +400,9 @@ describe("runTests — real process execution", () => {
     expect(outcome.exitCode).toBeNull();
   });
 
-  it("actually runs a passing npm test script and captures stdout + exit code", async () => {
+  it(
+    "actually runs a passing npm test script and captures stdout + exit code",
+    async () => {
     root = makeTempRepo();
     writeFile(
       root,
@@ -415,9 +417,21 @@ describe("runTests — real process execution", () => {
     expect(outcome.stdout).toContain("hello from test");
     // Framework is generic npm-script — counts are honestly unknown, not fabricated.
     expect(outcome.passed).toBeNull();
-  });
+    },
+    // All of these spawn `npm test` for real — on Windows that goes
+    // through an extra .cmd/cmd.exe wrapper layer (see run.ts's Windows
+    // notes) whose startup cost, especially under load, can exceed
+    // Vitest's 5s default even though nothing is actually hung. A real
+    // pasted Windows run (2026-08-20) hit this on the node --test
+    // variant specifically; the same generous timeout is applied to its
+    // siblings here so this doesn't just reappear on a slightly slower
+    // machine or a busier CI run.
+    20_000
+  );
 
-  it("actually runs `node --test` and captures real pass/fail counts, not fabricated zeros", async () => {
+  it(
+    "actually runs `node --test` and captures real pass/fail counts, not fabricated zeros",
+    async () => {
     root = makeTempRepo();
     writeFile(
       root,
@@ -443,16 +457,22 @@ describe("runTests — real process execution", () => {
     expect(outcome.passed).toBe(2);
     expect(outcome.failed).toBe(1);
     expect(outcome.skipped).toBe(0);
-  });
+    },
+    20_000
+  );
 
-  it("actually runs a failing npm test script and reports a non-zero exit code", async () => {
+  it(
+    "actually runs a failing npm test script and reports a non-zero exit code",
+    async () => {
     root = makeTempRepo();
     writeFile(root, "package.json", JSON.stringify({ scripts: { test: "node -e \"process.exit(1)\"" } }));
 
     const outcome = await runTests(root);
     expect(outcome.supported).toBe(true);
     expect(outcome.exitCode).toBe(1);
-  });
+    },
+    20_000
+  );
 
   it.skipIf(!commandExists("pytest", ["--version"]))(
     "actually runs pytest and captures real pass/fail counts (Task #89)",
