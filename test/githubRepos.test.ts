@@ -80,6 +80,8 @@ describe("GitHub repo browser + clone-to-register (Task #84)", () => {
     }
     global.fetch = originalFetch;
     app.close();
+    // See auth.test.ts's afterEach for why this is required on Windows.
+    db.close();
     fs.rmSync(tmpDbDir, { recursive: true, force: true });
     fs.rmSync(dataDir, { recursive: true, force: true });
   });

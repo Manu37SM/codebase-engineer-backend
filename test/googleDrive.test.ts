@@ -75,6 +75,8 @@ describe("Google Drive zip-file picker (Task #86)", () => {
     }
     global.fetch = originalFetch;
     app.close();
+    // See auth.test.ts's afterEach for why this is required on Windows.
+    db.close();
     fs.rmSync(tmpDbDir, { recursive: true, force: true });
     fs.rmSync(dataDir, { recursive: true, force: true });
   });

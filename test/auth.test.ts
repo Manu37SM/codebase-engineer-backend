@@ -101,6 +101,11 @@ describe("auth API", () => {
       else process.env[k] = v;
     }
     app.close();
+    // Close the real sqlite handle before removing its file — on Windows
+    // (unlike POSIX) an open native file handle blocks unlink/rmdir with
+    // EBUSY, so skipping this makes cleanup flaky/failing there even
+    // though app.close() alone is enough on Linux/macOS.
+    db.close();
     fs.rmSync(tmpDbDir, { recursive: true, force: true });
   });
 

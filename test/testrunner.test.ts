@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
+import spawn from "cross-spawn";
 import { detectTestCommand } from "../src/testrunner/detect.js";
 import { runTests } from "../src/testrunner/run.js";
 import {
@@ -11,6 +12,23 @@ import {
   parseDotnetTestOutput,
 } from "../src/testrunner/parse.js";
 import { makeTempRepo, writeFile, cleanupRepo } from "./fixtures.js";
+
+/**
+ * Whether a real, invocable `cmd` exists on this machine's PATH — used to
+ * skip (not fail) the "actually runs <toolchain>" real-process-execution
+ * tests when that toolchain genuinely isn't installed here. The detection
+ * logic these tests exercise (`detectTestCommand`) only looks at project
+ * marker files, not at whether the binary is actually present — real CI
+ * environments and contributors' machines legitimately won't all have
+ * every one of Maven/Go/.NET/RSpec/pytest installed, and this project's
+ * own "never fabricate a result" convention extends to its own test
+ * suite: a missing toolchain should skip with a clear reason, not report
+ * a confusing false failure.
+ */
+function commandExists(cmd: string, versionArgs: string[] = ["--version"]): boolean {
+  const result = spawn.sync(cmd, versionArgs, { stdio: "ignore" });
+  return !result.error && result.status !== null;
+}
 
 describe("detectTestCommand", () => {
   let root: string;
@@ -436,7 +454,9 @@ describe("runTests — real process execution", () => {
     expect(outcome.exitCode).toBe(1);
   });
 
-  it("actually runs pytest and captures real pass/fail counts (Task #89)", async () => {
+  it.skipIf(!commandExists("pytest", ["--version"]))(
+    "actually runs pytest and captures real pass/fail counts (Task #89)",
+    async () => {
     root = makeTempRepo();
     writeFile(root, "pytest.ini", "[pytest]\n");
     writeFile(
@@ -454,9 +474,19 @@ describe("runTests — real process execution", () => {
     expect(outcome.passed).toBe(2);
     expect(outcome.failed).toBe(1);
     expect(outcome.skipped).toBe(0);
-  });
+    },
+    // pytest's interpreter/import startup can legitimately take longer
+    // than Vitest's 5s default on some machines (observed on a real
+    // Windows run) — this is a real subprocess doing real work, not a
+    // hang, so it gets the same generous per-test timeout as the other
+    // "actually runs <toolchain>" tests below rather than a fabricated
+    // pass from a lucky-fast machine.
+    20_000
+  );
 
-  it("actually runs `go test -v` and captures real pass/fail counts (Task #89)", async () => {
+  it.skipIf(!commandExists("go", ["version"]))(
+    "actually runs `go test -v` and captures real pass/fail counts (Task #89)",
+    async () => {
     root = makeTempRepo();
     writeFile(root, "go.mod", "module example.com/ce-testrunner-fixture\n\ngo 1.22\n");
     writeFile(
@@ -473,7 +503,9 @@ describe("runTests — real process execution", () => {
     expect(outcome.passed).toBe(1);
     expect(outcome.failed).toBe(1);
     expect(outcome.skipped).toBe(0);
-  }, 20_000);
+    },
+    20_000
+  );
 
   it("kills a long-running command on timeout and reports timedOut", async () => {
     root = makeTempRepo();

@@ -65,6 +65,8 @@ describe("OAuth sign-in (Google + GitHub)", () => {
     }
     global.fetch = originalFetch;
     app.close();
+    // See auth.test.ts's afterEach for why this is required on Windows.
+    db.close();
     fs.rmSync(tmpDbDir, { recursive: true, force: true });
   });
 

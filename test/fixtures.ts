@@ -26,13 +26,19 @@ export function gitCommitAll(root: string, message: string): void {
 }
 
 export function cleanupRepo(root: string): void {
-  // maxRetries/retryDelay: a real pasted Windows `npm test` run (2026-08-19)
-  // showed `EBUSY: resource busy or locked` here after the testrunner's
-  // real-process-execution tests — a lingering file lock from a just-killed
-  // child process (see run.ts's Windows round-2 note) can outlive the kill
-  // by a few tens of milliseconds. `fs.rmSync`'s built-in retry (linear
-  // backoff on EBUSY/EPERM/ENOTEMPTY/etc., only honored when `recursive` is
-  // true) absorbs that instead of failing the test on an OS timing race
-  // that isn't a real bug in the cleanup itself.
-  fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  // maxRetries/retryDelay: a real pasted Windows `npm test` run (2026-08-19,
+  // round 2) showed `EBUSY: resource busy or locked` here after the
+  // testrunner's real-process-execution tests — a lingering file lock from
+  // a just-killed child process (see run.ts's Windows round-2 note) can
+  // outlive the kill by longer than 5 retries * 200ms (~1s) covers.
+  // Round 3 (2026-08-20, another real pasted Windows run): still hit EBUSY
+  // even with round 2's window on the timeout-kill test specifically —
+  // `taskkill /t /f` returning doesn't guarantee Windows has finished
+  // releasing the killed process's file handles, so this widens the
+  // retry window further (up to ~4.5s) rather than fabricating a pass by
+  // just swallowing the error. `fs.rmSync`'s built-in retry (only honored
+  // when `recursive` is true) absorbs the OS timing race instead of
+  // failing the test on something that isn't a real bug in the cleanup
+  // itself.
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 300 });
 }
