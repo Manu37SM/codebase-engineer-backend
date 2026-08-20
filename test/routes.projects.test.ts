@@ -157,6 +157,87 @@ describe("projects API", () => {
     expect(res.statusCode).toBe(404);
   });
 
+  it("detects and registers a nested sub-project (Task #87)", async () => {
+    writeFile(repoRoot, "backend-service/pyproject.toml", "[tool.poetry]\n");
+    writeFile(repoRoot, "backend-service/app.py", "print('hi')\n");
+
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      payload: { name: "monorepo", rootPath: repoRoot },
+    });
+    const { project } = createRes.json();
+
+    const detectRes = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/subprojects` });
+    expect(detectRes.statusCode).toBe(200);
+    const detectBody = detectRes.json();
+    expect(detectBody.isMultiProject).toBe(true);
+    const nested = detectBody.candidates.find((c: { relativePath: string }) => c.relativePath === "backend-service");
+    expect(nested).toBeTruthy();
+    expect(nested.markers).toContain("pyproject.toml");
+
+    const registerRes = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${project.id}/subprojects/register`,
+      payload: { relativePath: "backend-service" },
+    });
+    expect(registerRes.statusCode).toBe(201);
+    const subProject = registerRes.json().project;
+    expect(subProject.name).toBe("backend-service");
+    expect(subProject.root_path).toBe(path.join(repoRoot, "backend-service"));
+
+    // Parent project is untouched — both now coexist in the workspace.
+    const listRes = await app.inject({ method: "GET", url: "/api/v1/projects" });
+    const ids = listRes.json().projects.map((p: { id: string }) => p.id);
+    expect(ids).toContain(project.id);
+    expect(ids).toContain(subProject.id);
+  });
+
+  it("404s /subprojects for an unknown project", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/v1/projects/does-not-exist/subprojects" });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("rejects registering the same sub-project path twice", async () => {
+    writeFile(repoRoot, "lib/package.json", "{}");
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      payload: { name: "monorepo2", rootPath: repoRoot },
+    });
+    const { project } = createRes.json();
+
+    const first = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${project.id}/subprojects/register`,
+      payload: { relativePath: "lib" },
+    });
+    expect(first.statusCode).toBe(201);
+
+    const second = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${project.id}/subprojects/register`,
+      payload: { relativePath: "lib" },
+    });
+    expect(second.statusCode).toBe(409);
+  });
+
+  it("rejects registering a sub-project path that escapes the parent root", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      payload: { name: "escape-test", rootPath: repoRoot },
+    });
+    const { project } = createRes.json();
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${project.id}/subprojects/register`,
+      payload: { relativePath: "../../etc" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it("registers a project by cloning a real remote git URL (Task #85)", async () => {
     const sourceRepo = makeTempRepo();
     try {

@@ -11,6 +11,7 @@ import {
   getLatestSnapshot,
 } from "../db/projectRepo.js";
 import { assertValidProjectRoot, resolveWithinRoot, PathTraversalError } from "../security/paths.js";
+import { detectSubProjects } from "../discovery/multiProject.js";
 import { cloneGitUrl } from "../importer/gitUrl.js";
 import { downloadAndExtractZip } from "../importer/zipUrl.js";
 import { checkAiOperationAllowed } from "../billing/usageLimiter.js";
@@ -220,6 +221,64 @@ export function registerProjectsRoutes(
     if (!project) return reply.status(404).send({ error: "Project not found" });
     deleteProject(db, id);
     return reply.status(204).send();
+  });
+
+  /**
+   * Multi-project-in-folder detection (Task #87) — scans this project's
+   * registered root for other plausible project roots nested inside it
+   * (a monorepo, an org-wide "Download ZIP", a folder that turns out to
+   * hold several unrelated projects). Read-only: never registers anything
+   * by itself — that's the paired `/subprojects/register` route below,
+   * left as an explicit, separate, human-triggered action.
+   */
+  app.get("/api/v1/projects/:id/subprojects", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    let result;
+    try {
+      result = detectSubProjects(project.root_path);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+
+    return reply.status(200).send(result);
+  });
+
+  /**
+   * Registers one detected sub-directory as its own separate project —
+   * the parent project registration is left untouched (both can coexist),
+   * matching the "never silently replace what the user already set up"
+   * convention the rest of this product follows (e.g. Task #94's
+   * remove-project never touches files on disk).
+   */
+  app.post("/api/v1/projects/:id/subprojects/register", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const body = request.body as { relativePath?: string; name?: string } | undefined;
+    if (body?.relativePath === undefined || body.relativePath === null) {
+      return reply.status(400).send({ error: "relativePath is required (use \"\" for the root itself)." });
+    }
+
+    let subRoot: string;
+    try {
+      subRoot = body.relativePath === "" ? project.root_path : resolveWithinRoot(project.root_path, body.relativePath);
+      assertValidProjectRoot(subRoot);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+
+    const existing = getProjectByRootPath(db, subRoot);
+    if (existing) {
+      return reply.status(409).send({ error: "A project is already registered for this path", project: existing });
+    }
+
+    const name = body.name?.trim() || path.basename(subRoot) || project.name;
+    const subProject = createProject(db, randomUUID(), name, subRoot);
+    return reply.status(201).send({ project: subProject });
   });
 
   app.post("/api/v1/projects/:id/discover", async (request, reply) => {
