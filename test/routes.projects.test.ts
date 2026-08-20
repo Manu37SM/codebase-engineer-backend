@@ -114,6 +114,49 @@ describe("projects API", () => {
     expect(second.statusCode).toBe(409);
   });
 
+  it("removes a project from the workspace (Task #94) — cascades its findings, keeps the real repo on disk untouched", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      payload: { name: "to-remove", rootPath: repoRoot },
+    });
+    const { project } = createRes.json();
+
+    await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/discover` });
+    await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/index` });
+    const analysisRes = await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/analysis` });
+    expect(analysisRes.statusCode).toBe(200);
+
+    const deleteRes = await app.inject({ method: "DELETE", url: `/api/v1/projects/${project.id}` });
+    expect(deleteRes.statusCode).toBe(204);
+
+    // The project itself is gone.
+    const getRes = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}` });
+    expect(getRes.statusCode).toBe(404);
+
+    // ...and it no longer shows up in the list.
+    const listRes = await app.inject({ method: "GET", url: "/api/v1/projects" });
+    expect(listRes.json().projects.find((p: { id: string }) => p.id === project.id)).toBeUndefined();
+
+    // The real repository on disk is completely untouched — this only
+    // forgets Codebase Engineer's own record of it.
+    expect(fs.existsSync(path.join(repoRoot, "package.json"))).toBe(true);
+
+    // Re-registering the same path works again, starting fresh (proves
+    // the UNIQUE root_path row was actually removed, not just hidden).
+    const reRegisterRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      payload: { name: "to-remove-again", rootPath: repoRoot },
+    });
+    expect(reRegisterRes.statusCode).toBe(201);
+  });
+
+  it("404s deleting an unknown project", async () => {
+    const res = await app.inject({ method: "DELETE", url: "/api/v1/projects/does-not-exist" });
+    expect(res.statusCode).toBe(404);
+  });
+
   it("indexes a project, lists files, and reindex reflects deletions", async () => {
     const createRes = await app.inject({
       method: "POST",

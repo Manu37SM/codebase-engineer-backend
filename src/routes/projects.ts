@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type { DB } from "../db/index.js";
 import {
   createProject,
+  deleteProject,
   getProjectById,
   getProjectByRootPath,
   listProjects,
@@ -160,6 +161,21 @@ export function registerProjectsRoutes(
     if (!project) return reply.status(404).send({ error: "Project not found" });
     const latestSnapshot = getLatestSnapshot(db, id);
     return { project, latestSnapshot: latestSnapshot ?? null };
+  });
+
+  /**
+   * Removes a project (and everything derived from it — findings, runs,
+   * patches, etc., via cascade — see `deleteProject`'s own doc comment)
+   * from Codebase Engineer's workspace. Task #94 — "remove projects from
+   * the workspace". Never touches the actual repository on disk: this
+   * only forgets Codebase Engineer's own record of it.
+   */
+  app.delete("/api/v1/projects/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+    deleteProject(db, id);
+    return reply.status(204).send();
   });
 
   app.post("/api/v1/projects/:id/discover", async (request, reply) => {

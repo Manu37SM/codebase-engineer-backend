@@ -43,6 +43,25 @@ export function listProjects(db: DB): ProjectRecord[] {
   return db.prepare("SELECT * FROM project ORDER BY created_at DESC").all() as ProjectRecord[];
 }
 
+/**
+ * Removes a project's own record from Codebase Engineer — findings,
+ * snapshots, indexed files, analysis/test runs, patches, generated tests,
+ * and audit reports all cascade-delete with it (every one of those tables
+ * declares `project_id ... REFERENCES project(id) ON DELETE CASCADE` —
+ * see migrations 001/006/008 — and `db/index.ts` turns on
+ * `PRAGMA foreign_keys = ON`, so a single DELETE here is enough; SQLite
+ * enforces the cascade, not application code).
+ *
+ * Deliberately does NOT touch anything on disk: the repository at
+ * `root_path` is the user's own, on their own machine (Task #94, "remove
+ * from workspace") — this only forgets that Codebase Engineer ever
+ * registered it. Re-registering the same path afterwards starts fresh,
+ * with no memory of the deleted project's findings/history.
+ */
+export function deleteProject(db: DB, id: string): void {
+  db.prepare("DELETE FROM project WHERE id = ?").run(id);
+}
+
 export function saveDiscoverySnapshot(
   db: DB,
   id: string,
