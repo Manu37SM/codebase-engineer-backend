@@ -120,3 +120,104 @@ function matchTapCount(output: string, label: string): number | null {
   const match = output.match(new RegExp(`^#\\s*${label}\\s+(\\d+)\\s*$`, "m"));
   return match ? Number(match[1]) : null;
 }
+
+/**
+ * Parses pytest's final one-line summary, e.g.:
+ *   "5 passed in 0.12s"
+ *   "3 failed, 5 passed in 0.34s"
+ *   "1 failed, 2 passed, 1 skipped in 0.10s"
+ *   "2 passed, 1 error in 0.05s"
+ * Errors (collection/fixture errors, not assertion failures) are counted
+ * as failed — same "didn't pass" treatment Maven's Surefire parser gives
+ * its own "Errors" count.
+ */
+export function parsePytestOutput(rawOutput: string): TestCounts {
+  const output = stripAnsi(rawOutput);
+  const passed = matchCount(output, "passed");
+  const failed = matchCount(output, "failed");
+  const errors = matchCount(output, "errors?");
+  const skipped = matchCount(output, "skipped");
+
+  if (passed === null && failed === null && errors === null && skipped === null) return NO_COUNTS;
+  return { passed: passed ?? 0, failed: (failed ?? 0) + (errors ?? 0), skipped: skipped ?? 0 };
+}
+
+/**
+ * Parses RSpec's default summary line, e.g.:
+ *   "10 examples, 2 failures"
+ *   "10 examples, 2 failures, 1 pending"
+ * "pending" (RSpec's skip mechanism) is reported as skipped.
+ */
+export function parseRspecOutput(rawOutput: string): TestCounts {
+  const output = stripAnsi(rawOutput);
+  const match = output.match(/(\d+)\s+examples?,\s*(\d+)\s+failures?(?:,\s*(\d+)\s+pending)?/);
+  if (!match) return NO_COUNTS;
+
+  const examples = Number(match[1]);
+  const failures = Number(match[2]);
+  const pending = match[3] ? Number(match[3]) : 0;
+  const passed = Math.max(examples - failures - pending, 0);
+  return { passed, failed: failures, skipped: pending };
+}
+
+/**
+ * Parses `go test -v ./...` output by counting individual `--- PASS:` /
+ * `--- FAIL:` / `--- SKIP:` lines (one per test function) — `go test`'s
+ * non-verbose mode only prints a per-package ok/FAIL line, with no
+ * individual test counts, so this framework is always invoked with `-v`
+ * (see detect.ts) specifically so this parser has something to count.
+ */
+export function parseGoTestOutput(rawOutput: string): TestCounts {
+  const output = stripAnsi(rawOutput);
+  const passed = countMatches(output, /^\s*--- PASS: /gm);
+  const failed = countMatches(output, /^\s*--- FAIL: /gm);
+  const skipped = countMatches(output, /^\s*--- SKIP: /gm);
+
+  if (passed === 0 && failed === 0 && skipped === 0) return NO_COUNTS;
+  return { passed, failed, skipped };
+}
+
+/**
+ * Parses `dotnet test` output, which has two summary formats depending on
+ * SDK version:
+ *   New (VSTest): "Failed:     0, Passed:    12, Skipped:     0, Total:    12"
+ *   Old (legacy): "Total tests: 12. Passed: 12. Failed: 0. Skipped: 0."
+ * Sums across multiple test project summaries, same reasoning as Maven's
+ * multi-module sum: `dotnet test` on a solution runs every test project
+ * and prints one summary line per project, with no separate grand total.
+ */
+export function parseDotnetTestOutput(rawOutput: string): TestCounts {
+  const output = stripAnsi(rawOutput);
+
+  const newFormat = /Failed:\s*(\d+),\s*Passed:\s*(\d+),\s*Skipped:\s*(\d+),\s*Total:\s*(\d+)/g;
+  const oldFormat = /Total tests:\s*(\d+)\.\s*Passed:\s*(\d+)\.\s*Failed:\s*(\d+)\.\s*Skipped:\s*(\d+)\./g;
+
+  let passed = 0;
+  let failed = 0;
+  let skipped = 0;
+  let found = false;
+
+  let match: RegExpExecArray | null;
+  while ((match = newFormat.exec(output)) !== null) {
+    found = true;
+    failed += Number(match[1]);
+    passed += Number(match[2]);
+    skipped += Number(match[3]);
+  }
+  if (!found) {
+    while ((match = oldFormat.exec(output)) !== null) {
+      found = true;
+      passed += Number(match[2]);
+      failed += Number(match[3]);
+      skipped += Number(match[4]);
+    }
+  }
+
+  if (!found) return NO_COUNTS;
+  return { passed, failed, skipped };
+}
+
+function countMatches(text: string, pattern: RegExp): number {
+  const matches = text.match(pattern);
+  return matches ? matches.length : 0;
+}

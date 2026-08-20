@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { detectPackageManagers } from "../discovery/packageManager.js";
 
-export type TestFramework = "vitest" | "node-test" | "npm-script" | "maven";
+export type TestFramework = "vitest" | "node-test" | "npm-script" | "maven" | "pytest" | "rspec" | "go-test" | "dotnet-test";
 
 export interface TestCommandDetection {
   supported: boolean;
@@ -94,11 +94,79 @@ export function detectTestCommand(root: string): TestCommandDetection {
     };
   }
 
+  if (fs.existsSync(path.join(root, "go.mod"))) {
+    return { supported: true, framework: "go-test", command: "go", args: ["test", "-v", "./..."] };
+  }
+
+  if (findFileWithExtension(root, [".sln", ".csproj"])) {
+    return { supported: true, framework: "dotnet-test", command: "dotnet", args: ["test"] };
+  }
+
+  const gemfilePath = path.join(root, "Gemfile");
+  const hasGemfile = fs.existsSync(gemfilePath);
+  const gemfileMentionsRspec = hasGemfile && safeReadIncludes(gemfilePath, "rspec");
+  const hasRspecMarkers = fs.existsSync(path.join(root, ".rspec")) || fs.existsSync(path.join(root, "spec"));
+  if (gemfileMentionsRspec || hasRspecMarkers) {
+    return hasGemfile
+      ? { supported: true, framework: "rspec", command: "bundle", args: ["exec", "rspec"] }
+      : { supported: true, framework: "rspec", command: "rspec", args: [] };
+  }
+
+  if (detectsPytest(root)) {
+    return { supported: true, framework: "pytest", command: "pytest", args: ["-q"] };
+  }
+
   return {
     supported: false,
     framework: null,
     command: null,
     args: [],
-    reason: "No supported build system detected (Maven or npm/pnpm/yarn)",
+    reason: "No supported build system detected (Maven, npm/pnpm/yarn, Go, .NET, RSpec, or pytest)",
   };
+}
+
+/** Non-recursive: only checks files directly in `root`, matching how a `.sln`/`.csproj` normally sits at a .NET project's root. */
+function findFileWithExtension(root: string, extensions: string[]): boolean {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(root);
+  } catch {
+    return false;
+  }
+  return entries.some((name) => extensions.some((ext) => name.toLowerCase().endsWith(ext)));
+}
+
+function safeReadIncludes(filePath: string, needle: string): boolean {
+  try {
+    return fs.readFileSync(filePath, "utf-8").toLowerCase().includes(needle.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Python has no single canonical "this is a pytest project" file the way
+ * Maven has `pom.xml` — pytest is detected from any of the conventional
+ * signals: a dedicated config file/section, a `conftest.py` fixture file,
+ * or pytest listed as a dependency. Deliberately does NOT trigger on a
+ * bare `setup.py`/`.py` file alone — that would misclassify any Python
+ * project as pytest-testable even with no tests or a different test
+ * framework (unittest, nose, etc.) in use.
+ */
+function detectsPytest(root: string): boolean {
+  if (fs.existsSync(path.join(root, "pytest.ini"))) return true;
+  if (fs.existsSync(path.join(root, "conftest.py"))) return true;
+
+  const pyprojectPath = path.join(root, "pyproject.toml");
+  if (fs.existsSync(pyprojectPath) && safeReadIncludes(pyprojectPath, "pytest")) return true;
+
+  const setupCfgPath = path.join(root, "setup.cfg");
+  if (fs.existsSync(setupCfgPath) && safeReadIncludes(setupCfgPath, "[tool:pytest]")) return true;
+
+  for (const reqFile of ["requirements.txt", "requirements-dev.txt", "requirements_dev.txt", "dev-requirements.txt"]) {
+    const reqPath = path.join(root, reqFile);
+    if (fs.existsSync(reqPath) && safeReadIncludes(reqPath, "pytest")) return true;
+  }
+
+  return false;
 }

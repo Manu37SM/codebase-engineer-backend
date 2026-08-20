@@ -1,10 +1,13 @@
 import { readTextFileSafe, WalkedFile } from "./fileWalker.js";
 
 /**
- * Initial strong language support, per docs/PRD.md §3: Java, JavaScript,
- * TypeScript. Other extensions are still counted under "Other" so the
- * dashboard's file totals stay accurate, but they don't get first-class
- * per-language LOC treatment yet.
+ * Language support, per docs/PRD.md §3 — started with Java, JavaScript,
+ * TypeScript; broadened (Task #89) to cover the other languages the
+ * test-runner (backend/src/testrunner/detect.ts) and the rest of the
+ * product's docs already promise: Python, Ruby, Go, C#, PHP, C/C++, SQL,
+ * Rust, Kotlin, Swift. Other extensions are still counted under "Other" so
+ * the dashboard's file totals stay accurate, but they don't get
+ * first-class per-language LOC treatment.
  */
 export const EXTENSION_LANGUAGE_MAP: Record<string, string> = {
   ".java": "Java",
@@ -14,6 +17,28 @@ export const EXTENSION_LANGUAGE_MAP: Record<string, string> = {
   ".cjs": "JavaScript",
   ".ts": "TypeScript",
   ".tsx": "TypeScript",
+  ".py": "Python",
+  ".pyi": "Python",
+  ".pyw": "Python",
+  ".rb": "Ruby",
+  ".rake": "Ruby",
+  ".go": "Go",
+  ".cs": "C#",
+  ".php": "PHP",
+  ".phtml": "PHP",
+  ".c": "C",
+  ".h": "C",
+  ".cpp": "C++",
+  ".cc": "C++",
+  ".cxx": "C++",
+  ".hpp": "C++",
+  ".hh": "C++",
+  ".hxx": "C++",
+  ".sql": "SQL",
+  ".rs": "Rust",
+  ".kt": "Kotlin",
+  ".kts": "Kotlin",
+  ".swift": "Swift",
 };
 
 /** Returns the detected language for a relative path, or null if unrecognized. */

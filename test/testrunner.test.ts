@@ -1,7 +1,15 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { detectTestCommand } from "../src/testrunner/detect.js";
 import { runTests } from "../src/testrunner/run.js";
-import { parseVitestOutput, parseMavenOutput, parseNodeTestOutput } from "../src/testrunner/parse.js";
+import {
+  parseVitestOutput,
+  parseMavenOutput,
+  parseNodeTestOutput,
+  parsePytestOutput,
+  parseRspecOutput,
+  parseGoTestOutput,
+  parseDotnetTestOutput,
+} from "../src/testrunner/parse.js";
 import { makeTempRepo, writeFile, cleanupRepo } from "./fixtures.js";
 
 describe("detectTestCommand", () => {
@@ -118,6 +126,73 @@ describe("detectTestCommand", () => {
     const result = detectTestCommand(root);
     expect(result.supported).toBe(false);
   });
+
+  it("detects Go from go.mod (Task #89)", () => {
+    root = makeTempRepo();
+    writeFile(root, "go.mod", "module example.com/foo\n\ngo 1.22\n");
+
+    const result = detectTestCommand(root);
+    expect(result).toEqual({ supported: true, framework: "go-test", command: "go", args: ["test", "-v", "./..."] });
+  });
+
+  it("detects .NET from a .csproj file (Task #89)", () => {
+    root = makeTempRepo();
+    writeFile(root, "MyApp.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n");
+
+    const result = detectTestCommand(root);
+    expect(result).toEqual({ supported: true, framework: "dotnet-test", command: "dotnet", args: ["test"] });
+  });
+
+  it("detects .NET from a .sln file (Task #89)", () => {
+    root = makeTempRepo();
+    writeFile(root, "MySolution.sln", "Microsoft Visual Studio Solution File\n");
+
+    const result = detectTestCommand(root);
+    expect(result.supported).toBe(true);
+    expect(result.framework).toBe("dotnet-test");
+  });
+
+  it("detects RSpec via a Gemfile that declares it (Task #89)", () => {
+    root = makeTempRepo();
+    writeFile(root, "Gemfile", "source 'https://rubygems.org'\ngem 'rspec'\n");
+
+    const result = detectTestCommand(root);
+    expect(result).toEqual({ supported: true, framework: "rspec", command: "bundle", args: ["exec", "rspec"] });
+  });
+
+  it("detects RSpec from a spec/ directory even without a Gemfile (Task #89)", () => {
+    root = makeTempRepo();
+    writeFile(root, "spec/foo_spec.rb", "RSpec.describe 'Foo' do; end\n");
+
+    const result = detectTestCommand(root);
+    expect(result).toEqual({ supported: true, framework: "rspec", command: "rspec", args: [] });
+  });
+
+  it("detects pytest from pytest.ini (Task #89)", () => {
+    root = makeTempRepo();
+    writeFile(root, "pytest.ini", "[pytest]\n");
+    writeFile(root, "test_foo.py", "def test_ok():\n    assert True\n");
+
+    const result = detectTestCommand(root);
+    expect(result).toEqual({ supported: true, framework: "pytest", command: "pytest", args: ["-q"] });
+  });
+
+  it("detects pytest declared in requirements.txt (Task #89)", () => {
+    root = makeTempRepo();
+    writeFile(root, "requirements.txt", "pytest==8.0.0\nrequests\n");
+
+    const result = detectTestCommand(root);
+    expect(result.supported).toBe(true);
+    expect(result.framework).toBe("pytest");
+  });
+
+  it("does not misclassify a bare Python file (no pytest signal) as pytest-testable (Task #89)", () => {
+    root = makeTempRepo();
+    writeFile(root, "app.py", "print('hi')\n");
+
+    const result = detectTestCommand(root);
+    expect(result.supported).toBe(false);
+  });
 });
 
 describe("parseVitestOutput", () => {
@@ -206,6 +281,93 @@ describe("parseNodeTestOutput", () => {
   });
 });
 
+describe("parsePytestOutput", () => {
+  it("parses an all-passing summary", () => {
+    expect(parsePytestOutput("5 passed in 0.12s\n")).toEqual({ passed: 5, failed: 0, skipped: 0 });
+  });
+
+  it("parses failures alongside passes", () => {
+    expect(parsePytestOutput("3 failed, 5 passed in 0.34s\n")).toEqual({ passed: 5, failed: 3, skipped: 0 });
+  });
+
+  it("parses failures, passes, and skips together", () => {
+    expect(parsePytestOutput("1 failed, 2 passed, 1 skipped in 0.10s\n")).toEqual({
+      passed: 2,
+      failed: 1,
+      skipped: 1,
+    });
+  });
+
+  it("counts errors as failed", () => {
+    expect(parsePytestOutput("2 passed, 1 error in 0.05s\n")).toEqual({ passed: 2, failed: 1, skipped: 0 });
+  });
+
+  it("returns null counts when no summary is found", () => {
+    expect(parsePytestOutput("some unrelated output\n")).toEqual({ passed: null, failed: null, skipped: null });
+  });
+});
+
+describe("parseRspecOutput", () => {
+  it("parses an all-passing summary", () => {
+    expect(parseRspecOutput("10 examples, 0 failures\n")).toEqual({ passed: 10, failed: 0, skipped: 0 });
+  });
+
+  it("parses failures alongside pending", () => {
+    expect(parseRspecOutput("10 examples, 2 failures, 1 pending\n")).toEqual({
+      passed: 7,
+      failed: 2,
+      skipped: 1,
+    });
+  });
+
+  it("returns null counts when no summary is found", () => {
+    expect(parseRspecOutput("some unrelated output\n")).toEqual({ passed: null, failed: null, skipped: null });
+  });
+});
+
+describe("parseGoTestOutput", () => {
+  it("counts verbose PASS/FAIL/SKIP lines", () => {
+    const output = [
+      "=== RUN   TestAdd",
+      "--- PASS: TestAdd (0.00s)",
+      "=== RUN   TestSub",
+      "--- FAIL: TestSub (0.00s)",
+      "=== RUN   TestSkipMe",
+      "--- SKIP: TestSkipMe (0.00s)",
+      "FAIL",
+    ].join("\n");
+    expect(parseGoTestOutput(output)).toEqual({ passed: 1, failed: 1, skipped: 1 });
+  });
+
+  it("returns null counts when no verbose test lines are found", () => {
+    expect(parseGoTestOutput("some unrelated output\n")).toEqual({ passed: null, failed: null, skipped: null });
+  });
+});
+
+describe("parseDotnetTestOutput", () => {
+  it("parses the new VSTest-style summary line", () => {
+    const output = "Passed!  - Failed:     0, Passed:    12, Skipped:     0, Total:    12, Duration: 45 ms\n";
+    expect(parseDotnetTestOutput(output)).toEqual({ passed: 12, failed: 0, skipped: 0 });
+  });
+
+  it("parses the legacy summary line", () => {
+    const output = "Total tests: 12. Passed: 10. Failed: 1. Skipped: 1.\n";
+    expect(parseDotnetTestOutput(output)).toEqual({ passed: 10, failed: 1, skipped: 1 });
+  });
+
+  it("sums multiple project summaries in a multi-project solution", () => {
+    const output = [
+      "Failed:     0, Passed:     5, Skipped:     0, Total:     5",
+      "Failed:     1, Passed:     7, Skipped:     1, Total:     9",
+    ].join("\n");
+    expect(parseDotnetTestOutput(output)).toEqual({ passed: 12, failed: 1, skipped: 1 });
+  });
+
+  it("returns null counts when no summary is found", () => {
+    expect(parseDotnetTestOutput("some unrelated output\n")).toEqual({ passed: null, failed: null, skipped: null });
+  });
+});
+
 describe("runTests — real process execution", () => {
   let root: string;
   afterEach(() => root && cleanupRepo(root));
@@ -273,6 +435,45 @@ describe("runTests — real process execution", () => {
     expect(outcome.supported).toBe(true);
     expect(outcome.exitCode).toBe(1);
   });
+
+  it("actually runs pytest and captures real pass/fail counts (Task #89)", async () => {
+    root = makeTempRepo();
+    writeFile(root, "pytest.ini", "[pytest]\n");
+    writeFile(
+      root,
+      "test_sample.py",
+      ["def test_pass1():", "    assert True", "", "def test_pass2():", "    assert True", "", "def test_fail():", "    assert False", ""].join(
+        "\n"
+      )
+    );
+
+    const outcome = await runTests(root);
+    expect(outcome.supported).toBe(true);
+    expect(outcome.framework).toBe("pytest");
+    expect(outcome.exitCode).not.toBe(0);
+    expect(outcome.passed).toBe(2);
+    expect(outcome.failed).toBe(1);
+    expect(outcome.skipped).toBe(0);
+  });
+
+  it("actually runs `go test -v` and captures real pass/fail counts (Task #89)", async () => {
+    root = makeTempRepo();
+    writeFile(root, "go.mod", "module example.com/ce-testrunner-fixture\n\ngo 1.22\n");
+    writeFile(
+      root,
+      "main_test.go",
+      ["package main", "", "import \"testing\"", "", "func TestPass(t *testing.T) {}", "", "func TestFail(t *testing.T) {", "\tt.Fail()", "}", ""].join(
+        "\n"
+      )
+    );
+
+    const outcome = await runTests(root);
+    expect(outcome.supported).toBe(true);
+    expect(outcome.framework).toBe("go-test");
+    expect(outcome.passed).toBe(1);
+    expect(outcome.failed).toBe(1);
+    expect(outcome.skipped).toBe(0);
+  }, 20_000);
 
   it("kills a long-running command on timeout and reports timedOut", async () => {
     root = makeTempRepo();
