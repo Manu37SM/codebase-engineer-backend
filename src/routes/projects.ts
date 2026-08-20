@@ -11,6 +11,8 @@ import {
   getLatestSnapshot,
 } from "../db/projectRepo.js";
 import { assertValidProjectRoot, resolveWithinRoot, PathTraversalError } from "../security/paths.js";
+import { cloneGitUrl } from "../importer/gitUrl.js";
+import { downloadAndExtractZip } from "../importer/zipUrl.js";
 import { checkAiOperationAllowed } from "../billing/usageLimiter.js";
 import { discoverRepository } from "../discovery/index.js";
 import { indexRepository } from "../indexer/index.js";
@@ -77,6 +79,8 @@ import path from "node:path";
 
 interface RegisterProjectsRoutesOptions {
   db: DB;
+  /** Where imported (git-URL/zip-URL) project clones are stored (Task #85) — see BuildAppOptions.dataDir in app.ts. */
+  dataDir: string;
 }
 
 /**
@@ -125,7 +129,7 @@ function resolveEnabledProvider(
 
 export function registerProjectsRoutes(
   app: FastifyInstance,
-  { db }: RegisterProjectsRoutesOptions
+  { db, dataDir }: RegisterProjectsRoutesOptions
 ) {
   app.post("/api/v1/projects", async (request, reply) => {
     const body = request.body as { name?: string; rootPath?: string } | undefined;
@@ -148,6 +152,46 @@ export function registerProjectsRoutes(
     }
 
     const project = createProject(db, randomUUID(), body.name, body.rootPath);
+    return reply.status(201).send({ project });
+  });
+
+  /**
+   * Registration by remote git URL or plain zip/download URL (Task #85) —
+   * two of the four project sources the user asked for. Clones/downloads
+   * onto THIS machine under its own data directory, then registers the
+   * result exactly like any other local path — still local-first, nothing
+   * is ever stored remotely.
+   */
+  app.post("/api/v1/projects/import", async (request, reply) => {
+    const body = request.body as { name?: string; sourceType?: string; sourceUrl?: string } | undefined;
+    if (!body?.name || !body?.sourceUrl) {
+      return reply.status(400).send({ error: "name and sourceUrl are required" });
+    }
+    if (body.sourceType !== "git" && body.sourceType !== "zip") {
+      return reply.status(400).send({ error: "sourceType must be 'git' or 'zip'" });
+    }
+
+    const importId = randomUUID();
+    const destDir = path.join(dataDir, "imports", importId);
+    fs.mkdirSync(path.dirname(destDir), { recursive: true });
+
+    try {
+      if (body.sourceType === "git") {
+        cloneGitUrl(body.sourceUrl, destDir);
+      } else {
+        await downloadAndExtractZip(body.sourceUrl, destDir);
+      }
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+
+    try {
+      assertValidProjectRoot(destDir);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+
+    const project = createProject(db, randomUUID(), body.name, destDir);
     return reply.status(201).send({ project });
   });
 

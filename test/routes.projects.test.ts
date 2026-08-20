@@ -157,6 +157,49 @@ describe("projects API", () => {
     expect(res.statusCode).toBe(404);
   });
 
+  it("registers a project by cloning a real remote git URL (Task #85)", async () => {
+    const sourceRepo = makeTempRepo();
+    try {
+      writeFile(sourceRepo, "README.md", "# imported\n");
+      initGit(sourceRepo);
+      gitCommitAll(sourceRepo, "first commit");
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/projects/import",
+        payload: { name: "imported-via-git", sourceType: "git", sourceUrl: `file://${sourceRepo}` },
+      });
+      expect(res.statusCode).toBe(201);
+      const { project } = res.json();
+      expect(project.name).toBe("imported-via-git");
+      expect(fs.existsSync(path.join(project.root_path, "README.md"))).toBe(true);
+
+      // Registered like any other project — discover/index work on it.
+      const discoverRes = await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/discover` });
+      expect(discoverRes.statusCode).toBe(200);
+    } finally {
+      cleanupRepo(sourceRepo);
+    }
+  });
+
+  it("rejects an import with an invalid sourceType", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/projects/import",
+      payload: { name: "bad", sourceType: "carrier-pigeon", sourceUrl: "https://example.com/x" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("rejects an import with an invalid git URL", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/projects/import",
+      payload: { name: "bad", sourceType: "git", sourceUrl: "not a url" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it("indexes a project, lists files, and reindex reflects deletions", async () => {
     const createRes = await app.inject({
       method: "POST",

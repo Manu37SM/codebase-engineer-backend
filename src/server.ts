@@ -17,7 +17,7 @@ import { buildApp } from "./app.js";
 async function main() {
   const config = loadConfig();
   const db = openDatabase(config.dbPath);
-  const app = buildApp({ db, staticDir: config.staticDir, trustProxy: config.trustProxy });
+  const app = buildApp({ db, staticDir: config.staticDir, trustProxy: config.trustProxy, dataDir: config.dataDir });
 
   try {
     await app.listen({ port: config.port, host: config.host });

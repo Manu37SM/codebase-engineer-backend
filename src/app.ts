@@ -1,3 +1,4 @@
+import os from "node:os";
 import Fastify, { FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
 import fastifyCookie from "@fastify/cookie";
@@ -30,6 +31,15 @@ export interface BuildAppOptions {
    * exactly as before (trustProxy off), so this is purely additive.
    */
   trustProxy?: boolean;
+  /**
+   * Where imported (git-URL/zip-URL) project clones are stored (Task #85)
+   * — a subdirectory of this is used per import. Defaults to the OS temp
+   * directory when not provided, which is fine for tests but not for a
+   * real deployment (server.ts always passes the real configured data
+   * dir, so imported clones survive a restart the same as everything
+   * else in `CODEBASE_ENGINEER_DATA_DIR`).
+   */
+  dataDir?: string;
 }
 
 /**
@@ -65,7 +75,7 @@ export function buildApp(opts: BuildAppOptions): FastifyInstance {
     };
   });
 
-  registerProjectsRoutes(app, { db: opts.db });
+  registerProjectsRoutes(app, { db: opts.db, dataDir: opts.dataDir ?? os.tmpdir() });
   registerAiProviderRoutes(app, { db: opts.db });
   registerBillingRoutes(app, { db: opts.db });
 
