@@ -1,9 +1,14 @@
 import Fastify, { FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
+import fastifyCookie from "@fastify/cookie";
 import type { DB } from "./db/index.js";
 import { registerProjectsRoutes } from "./routes/projects.js";
 import { registerAiProviderRoutes } from "./routes/aiProviders.js";
 import { registerBillingRoutes } from "./routes/billing.js";
+import { registerAuthRoutes } from "./routes/auth.js";
+import { registerGoogleOAuthRoutes } from "./routes/oauthGoogle.js";
+import { registerGitHubOAuthRoutes } from "./routes/oauthGithub.js";
+import { authGuard } from "./auth/guard.js";
 
 export interface BuildAppOptions {
   db: DB;
@@ -16,6 +21,15 @@ export interface BuildAppOptions {
    * been; this is purely additive.
    */
   staticDir?: string | null;
+  /**
+   * Passed straight through to Fastify's own `trustProxy` option — see
+   * `AppConfig.trustProxy` in config.ts for the full rationale. Defaults to
+   * `false`, same as Fastify's own default: a bare, directly-reached
+   * process should never trust `X-Forwarded-*` headers a client could send
+   * itself. Every existing test that doesn't pass this continues to run
+   * exactly as before (trustProxy off), so this is purely additive.
+   */
+  trustProxy?: boolean;
 }
 
 /**
@@ -24,7 +38,19 @@ export interface BuildAppOptions {
  * without binding a port.
  */
 export function buildApp(opts: BuildAppOptions): FastifyInstance {
-  const app = Fastify({ logger: false });
+  const app = Fastify({ logger: false, trustProxy: opts.trustProxy ?? false });
+  app.register(fastifyCookie);
+
+  // Single choke point for auth (Task #91) — see `authGuard`'s own doc
+  // comment for exactly which paths it leaves alone and why. Registered
+  // before any route so it runs on every request; `isPublicPath` inside
+  // it is what keeps this from being a deadlock or from blocking static
+  // asset delivery.
+  app.addHook("preHandler", authGuard(opts.db));
+
+  registerAuthRoutes(app, { db: opts.db });
+  registerGoogleOAuthRoutes(app, { db: opts.db });
+  registerGitHubOAuthRoutes(app, { db: opts.db });
 
   app.get("/api/v1/health", async () => {
     const migrationCount = opts.db

@@ -30,6 +30,19 @@ export interface AppConfig {
    * required.
    */
   staticDir: string | null;
+  /**
+   * Whether to trust `X-Forwarded-*` headers (passed straight through to
+   * Fastify's own `trustProxy` option). Off by default — a bare `node
+   * dist/server.js` talked to directly has no proxy in front of it, and
+   * blindly trusting forwarded headers from an untrusted client would let
+   * them spoof `request.protocol`/`request.ip`. Turn this on (`TRUST_PROXY=1`)
+   * once you put a real reverse proxy in front of this process (see
+   * docs/DEPLOYMENT.md's "Going live behind a reverse proxy" section) — it's
+   * what lets the session cookie's `secure` flag correctly turn on when the
+   * proxy terminates TLS, even though this process itself only ever speaks
+   * plain HTTP.
+   */
+  trustProxy: boolean;
 }
 
 function resolveDataDir(): string {
@@ -58,5 +71,6 @@ export function loadConfig(): AppConfig {
   const host = process.env.HOST ?? "127.0.0.1";
   const dbPath = path.join(dataDir, "codebase-engineer.db");
   const staticDir = resolveStaticDir();
-  return { port, host, dataDir, dbPath, staticDir };
+  const trustProxy = process.env.TRUST_PROXY === "1" || process.env.TRUST_PROXY === "true";
+  return { port, host, dataDir, dbPath, staticDir, trustProxy };
 }
