@@ -290,4 +290,11 @@ describe("auth API", () => {
     });
     expect(loginRes.statusCode).toBe(200);
   });
+
+  it("reports which OAuth providers are configured, with no secrets leaked", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/v1/auth/providers" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ google: false, github: false });
+    expect(JSON.stringify(res.json())).not.toMatch(/secret|client/i);
+  });
 });

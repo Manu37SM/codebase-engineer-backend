@@ -14,6 +14,7 @@ import { hashPassword, verifyPassword } from "../auth/password.js";
 import { verifyTurnstile } from "../auth/turnstile.js";
 import { SESSION_COOKIE_NAME } from "../auth/guard.js";
 import { setSessionCookie } from "../auth/session.js";
+import { getGitHubOAuthConfig, getGoogleOAuthConfig } from "../auth/oauthConfig.js";
 
 interface RegisterAuthRoutesOptions {
   db: DB;
@@ -120,6 +121,19 @@ export function registerAuthRoutes(app: FastifyInstance, { db }: RegisterAuthRou
     }
     const user = getUserById(db, session.user_id);
     return reply.status(200).send({ authRequired, user: user ? publicUser(user) : null });
+  });
+
+  /**
+   * Lets the frontend know which OAuth providers are actually configured
+   * (Task #91), so it can hide "Continue with Google/GitHub" buttons
+   * instead of showing ones that would 404 — no secrets in the response,
+   * just booleans.
+   */
+  app.get("/api/v1/auth/providers", async () => {
+    return {
+      google: getGoogleOAuthConfig() !== null,
+      github: getGitHubOAuthConfig() !== null,
+    };
   });
 }
 
