@@ -1,5 +1,6 @@
 node_modules/
 dist/
+tsconfig.tsbuildinfo
 *.db
 *.db-journal
 *.db-wal
