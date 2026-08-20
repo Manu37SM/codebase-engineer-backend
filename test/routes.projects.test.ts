@@ -1498,6 +1498,115 @@ describe("projects API", () => {
     expect(fileContent).not.toContain("sk_live_ABCDEFGHIJKLMNOPQRSTUV");
   });
 
+  it("downloads a patch as a real zip without touching the project's files (Task #90)", async () => {
+    const { project, finding } = await setUpFindingWithFixPlan();
+
+    const createRes = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${project.id}/findings/${finding.id}/patches`,
+    });
+    const patch = createRes.json().patch;
+
+    const { url: genUrl, close: closeGen } = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ model: "gpt-test", choices: [{ message: { content: PATCH_DIFF }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }));
+    });
+    const providerRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/ai/providers",
+      payload: { name: "Zip Gen Provider", kind: "openai-compatible", baseUrl: genUrl, model: "gpt-test" },
+    });
+    await app.inject({ method: "PATCH", url: `/api/v1/ai/providers/${providerRes.json().provider.id}`, payload: { enabled: true } });
+    await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/patches/${patch.id}/approve` });
+    await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/patches/${patch.id}/generate` });
+    await closeGen();
+
+    const zipRes = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${project.id}/patches/${patch.id}/download-zip`,
+    });
+    expect(zipRes.statusCode).toBe(200);
+    expect(zipRes.headers["content-type"]).toBe("application/zip");
+    expect(zipRes.headers["content-disposition"]).toContain(`patch-${patch.id}.zip`);
+
+    // The real file on disk is completely untouched — this route never writes.
+    const fileContent = fs.readFileSync(path.join(repoRoot, "src/config.ts"), "utf-8");
+    expect(fileContent).toContain("sk_live_ABCDEFGHIJKLMNOPQRSTUV");
+
+    // The zip really contains the patched content, not the original.
+    const AdmZip = (await import("adm-zip")).default;
+    const zip = new AdmZip(zipRes.rawPayload);
+    const entry = zip.getEntry("src/config.ts");
+    expect(entry).toBeTruthy();
+    const patchedContent = zip.readAsText(entry!);
+    expect(patchedContent).toContain("process.env.API_KEY");
+    expect(patchedContent).not.toContain("sk_live_ABCDEFGHIJKLMNOPQRSTUV");
+  });
+
+  it("lets a project opt into 'download' apply mode via settings, and /apply refuses direct writes in that mode (Task #90)", async () => {
+    const { project, finding } = await setUpFindingWithFixPlan();
+
+    const settingsRes = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/projects/${project.id}/settings`,
+      payload: { applyMode: "download" },
+    });
+    expect(settingsRes.statusCode).toBe(200);
+    expect(settingsRes.json().project.apply_mode).toBe("download");
+
+    const createRes = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${project.id}/findings/${finding.id}/patches`,
+    });
+    const patch = createRes.json().patch;
+
+    const { url: genUrl, close: closeGen } = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ model: "gpt-test", choices: [{ message: { content: PATCH_DIFF }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }));
+    });
+    const providerRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/ai/providers",
+      payload: { name: "Download-Mode Gen Provider", kind: "openai-compatible", baseUrl: genUrl, model: "gpt-test" },
+    });
+    await app.inject({ method: "PATCH", url: `/api/v1/ai/providers/${providerRes.json().provider.id}`, payload: { enabled: true } });
+    await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/patches/${patch.id}/approve` });
+    await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/patches/${patch.id}/generate` });
+    await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/patches/${patch.id}/approve-apply` });
+    await closeGen();
+
+    const applyRes = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${project.id}/patches/${patch.id}/apply`,
+    });
+    expect(applyRes.statusCode).toBe(400);
+    expect(applyRes.json().error).toMatch(/download/);
+
+    // Nothing was written, and the patch is still approved_for_apply — switching back to direct mode lets it retry.
+    const fileContent = fs.readFileSync(path.join(repoRoot, "src/config.ts"), "utf-8");
+    expect(fileContent).toContain("sk_live_ABCDEFGHIJKLMNOPQRSTUV");
+    const patchAfter = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/patches/${patch.id}` });
+    expect(patchAfter.json().patch.status).toBe("approved_for_apply");
+
+    await app.inject({ method: "PATCH", url: `/api/v1/projects/${project.id}/settings`, payload: { applyMode: "direct" } });
+    const retryRes = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${project.id}/patches/${patch.id}/apply`,
+    });
+    expect(retryRes.statusCode).toBe(200);
+    expect(retryRes.json().patch.status).toBe("applied");
+  });
+
+  it("rejects an invalid applyMode value", async () => {
+    const { project } = await setUpFindingWithFixPlan();
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/projects/${project.id}/settings`,
+      payload: { applyMode: "carrier-pigeon" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it("rejects a diff after review and refuses to apply it", async () => {
     const { project, finding } = await setUpFindingWithFixPlan();
 

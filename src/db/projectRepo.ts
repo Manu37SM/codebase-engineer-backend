@@ -1,11 +1,15 @@
 import type { DB } from "./index.js";
 import type { DiscoveryResult } from "../discovery/index.js";
 
+export type ApplyMode = "direct" | "download";
+
 export interface ProjectRecord {
   id: string;
   name: string;
   root_path: string;
   created_at: string;
+  /** Task #90: whether an approved AI-Mode patch is written straight to disk ("direct", the default) or packaged as a downloadable zip instead ("download"). */
+  apply_mode: ApplyMode;
 }
 
 export interface RepositorySnapshotRecord {
@@ -60,6 +64,11 @@ export function listProjects(db: DB): ProjectRecord[] {
  */
 export function deleteProject(db: DB, id: string): void {
   db.prepare("DELETE FROM project WHERE id = ?").run(id);
+}
+
+/** Task #90: sets whether this project's approved patches apply straight to disk or download as a zip instead. */
+export function setProjectApplyMode(db: DB, id: string, applyMode: ApplyMode): void {
+  db.prepare("UPDATE project SET apply_mode = ? WHERE id = ?").run(applyMode, id);
 }
 
 export function saveDiscoverySnapshot(

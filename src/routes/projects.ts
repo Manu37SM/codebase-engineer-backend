@@ -9,6 +9,7 @@ import {
   listProjects,
   saveDiscoverySnapshot,
   getLatestSnapshot,
+  setProjectApplyMode,
 } from "../db/projectRepo.js";
 import { assertValidProjectRoot, resolveWithinRoot, PathTraversalError } from "../security/paths.js";
 import { detectSubProjects } from "../discovery/multiProject.js";
@@ -45,6 +46,7 @@ import {
 import { planFix, parseFixPlanSections, FIX_PLAN_OPERATION_TYPE } from "../ai/workflows/fixPlan.js";
 import { generatePatch } from "../ai/workflows/generatePatch.js";
 import { applyPatchToDisk } from "../patch/applyPatch.js";
+import { buildPatchZip } from "../patch/exportPatchZip.js";
 import {
   createPatch,
   createPatchReview,
@@ -221,6 +223,33 @@ export function registerProjectsRoutes(
     if (!project) return reply.status(404).send({ error: "Project not found" });
     deleteProject(db, id);
     return reply.status(204).send();
+  });
+
+  /**
+   * Task #90: the settings toggle deciding whether AI-Mode's `/apply`
+   * writes an approved patch straight to this project's real files
+   * ("direct", the default — unchanged behavior for every project
+   * predating this setting) or refuses in favor of the zip-download route
+   * ("download"), so someone can review/test a change by hand first.
+   * Deliberately per-project, not global: a person may trust a scratch
+   * checkout with direct writes while wanting review-first for a real
+   * working copy.
+   */
+  app.patch("/api/v1/projects/:id/settings", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const body = request.body as { applyMode?: string } | undefined;
+    if (body?.applyMode === undefined) {
+      return reply.status(400).send({ error: "applyMode is required." });
+    }
+    if (body.applyMode !== "direct" && body.applyMode !== "download") {
+      return reply.status(400).send({ error: 'applyMode must be "direct" or "download".' });
+    }
+
+    setProjectApplyMode(db, id, body.applyMode);
+    return reply.status(200).send({ project: getProjectById(db, id) });
   });
 
   /**
@@ -1077,11 +1106,58 @@ export function registerProjectsRoutes(
     if (!patch.diff_text) {
       return reply.status(400).send({ error: "Patch has no diff to apply." });
     }
+    // Task #90: a project set to "download" mode never gets a direct write
+    // here — the patch stays exactly as approved (still retryable once the
+    // setting is switched back), and the caller is pointed at the zip
+    // download route instead.
+    if (project.apply_mode === "download") {
+      return reply.status(400).send({
+        error:
+          'This project is set to download changes as a zip instead of applying them directly (see Settings). Use GET .../download-zip, or switch applyMode to "direct" first.',
+      });
+    }
 
     const result = applyPatchToDisk(project.root_path, patch.diff_text);
     setPatchApplyResult(db, patchId, result.success ? "applied" : "failed", result.error);
 
     return reply.status(200).send({ patch: getPatchById(db, patchId) });
+  });
+
+  /**
+   * Task #90: downloads the patched file(s) as a zip instead of writing
+   * them to the project's real files — the counterpart to the direct
+   * `/apply` route above, always available regardless of `apply_mode`
+   * (useful even in "direct" mode, e.g. to inspect a change before
+   * approving it for real). Requires a real diff to exist (any status from
+   * `proposed` onward) but does not require or change the patch's approval
+   * status — downloading a zip is read-only from the patch's own
+   * state-machine perspective, same as `/self-review`.
+   */
+  app.get("/api/v1/projects/:id/patches/:patchId/download-zip", async (request, reply) => {
+    const { id, patchId } = request.params as { id: string; patchId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const patch = getPatchById(db, patchId);
+    if (!patch || patch.project_id !== id) {
+      return reply.status(404).send({ error: "Patch not found" });
+    }
+    if (!patch.diff_text) {
+      return reply.status(400).send({ error: "Patch has no diff yet — generate one first via POST .../generate." });
+    }
+
+    let zipBuffer: Buffer;
+    try {
+      zipBuffer = buildPatchZip(project.root_path, patch.diff_text);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+
+    return reply
+      .status(200)
+      .header("Content-Type", "application/zip")
+      .header("Content-Disposition", `attachment; filename="patch-${patchId}.zip"`)
+      .send(zipBuffer);
   });
 
   /**
