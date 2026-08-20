@@ -310,11 +310,25 @@ describe("auth API", () => {
     expect(loginRes.statusCode).toBe(200);
   });
 
-  it("reports which OAuth providers are configured, with no secrets leaked", async () => {
+  it("reports which OAuth providers and Turnstile are configured, with no secrets leaked", async () => {
     const res = await app.inject({ method: "GET", url: "/api/v1/auth/providers" });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ google: false, github: false });
+    expect(res.json()).toEqual({ google: false, github: false, turnstile: false });
     expect(JSON.stringify(res.json())).not.toMatch(/secret|client/i);
+  });
+
+  it("reports turnstile: true once TURNSTILE_SECRET_KEY is set, without leaking its value", async () => {
+    const prev = process.env.TURNSTILE_SECRET_KEY;
+    process.env.TURNSTILE_SECRET_KEY = "test-secret-key";
+    try {
+      const res = await app.inject({ method: "GET", url: "/api/v1/auth/providers" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ google: false, github: false, turnstile: true });
+      expect(JSON.stringify(res.json())).not.toMatch(/test-secret-key/);
+    } finally {
+      if (prev === undefined) delete process.env.TURNSTILE_SECRET_KEY;
+      else process.env.TURNSTILE_SECRET_KEY = prev;
+    }
   });
 
   it("rate-limits repeated failed login attempts from the same caller (brute-force protection)", async () => {

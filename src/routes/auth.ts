@@ -176,6 +176,7 @@ export function registerAuthRoutes(app: FastifyInstance, { db }: RegisterAuthRou
     return {
       google: getGoogleOAuthConfig() !== null,
       github: getGitHubOAuthConfig() !== null,
+      turnstile: Boolean(process.env.TURNSTILE_SECRET_KEY?.trim()),
     };
   });
 }
