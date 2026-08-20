@@ -12,10 +12,13 @@ import type { FastifyInstance } from "fastify";
  * scripts, or send cross-origin fetches from the browser — its own
  * frontend and API are always same-origin (see docs/DEPLOYMENT.md: no
  * CORS headers are set anywhere in this codebase for the same reason).
- * If an operator later wires in the Cloudflare Turnstile widget
- * end-to-end (currently backend-only plumbing — see auth/turnstile.ts)
- * or the Razorpay Checkout script, `script-src`/`frame-src` below will
- * need extending to those specific origins; this is called out inline.
+ * The Cloudflare Turnstile widget (frontend/src/components/TurnstileWidget.tsx)
+ * and the Razorpay Checkout script (frontend/index.html) are both wired in
+ * end-to-end now, so their specific origins are allow-listed below rather
+ * than left as a "you'll need to extend this" note — both stay inert
+ * (script never loads/executes anything) unless an operator actually sets
+ * VITE_TURNSTILE_SITE_KEY / RAZORPAY_KEY_ID etc., so this doesn't loosen
+ * the policy for installs that leave those features off.
  */
 export function registerSecurityHeaders(app: FastifyInstance): void {
   app.addHook("onSend", async (request, reply) => {
@@ -27,15 +30,15 @@ export function registerSecurityHeaders(app: FastifyInstance): void {
       "Content-Security-Policy",
       [
         "default-src 'self'",
-        // Extend with 'https://challenges.cloudflare.com' if Turnstile's
-        // widget script is ever loaded client-side, and with
-        // 'https://checkout.razorpay.com' if the Razorpay Checkout
-        // script is added to index.html.
-        "script-src 'self'",
+        "script-src 'self' https://challenges.cloudflare.com https://checkout.razorpay.com",
         "style-src 'self' 'unsafe-inline'", // React/Tailwind utility classes don't need this, but some component libraries set inline style attributes — inline style ATTRIBUTES aren't blocked by CSP either way; this only covers <style> tags, kept for safety.
-        "img-src 'self' data:",
+        "img-src 'self' data: https://*.razorpay.com",
         "font-src 'self'",
-        "connect-src 'self'",
+        // Turnstile's own script makes XHR calls back to challenges.cloudflare.com,
+        // and Razorpay Checkout talks to api.razorpay.com (order status, payment methods, etc.).
+        "connect-src 'self' https://challenges.cloudflare.com https://api.razorpay.com https://lumberjack.razorpay.com",
+        // Turnstile renders its challenge in an iframe; Razorpay Checkout opens one too.
+        "frame-src https://challenges.cloudflare.com https://api.razorpay.com https://checkout.razorpay.com",
         "object-src 'none'",
         "base-uri 'self'",
         "frame-ancestors 'none'",
