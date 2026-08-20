@@ -159,7 +159,13 @@ describe("auth API", () => {
     const meRes = await app.inject({ method: "GET", url: "/api/v1/auth/me", headers: { cookie: cookie! } });
     expect(meRes.json()).toEqual({
       authRequired: true,
-      user: { id: expect.any(String), email: "alice@example.com", displayName: "Alice", createdAt: expect.any(String) },
+      user: {
+        id: expect.any(String),
+        email: "alice@example.com",
+        displayName: "Alice",
+        createdAt: expect.any(String),
+        githubConnected: false,
+      },
     });
   });
 

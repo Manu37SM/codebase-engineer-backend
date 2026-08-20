@@ -6,6 +6,7 @@ import {
   createSession,
   createUser,
   deleteSessionByToken,
+  getOauthIdentityForUser,
   getSessionByToken,
   getUserByEmail,
   getUserById,
@@ -120,7 +121,14 @@ export function registerAuthRoutes(app: FastifyInstance, { db }: RegisterAuthRou
       return reply.status(200).send({ authRequired, user: null });
     }
     const user = getUserById(db, session.user_id);
-    return reply.status(200).send({ authRequired, user: user ? publicUser(user) : null });
+    if (!user) {
+      return reply.status(200).send({ authRequired, user: null });
+    }
+    // Task #84: lets the frontend know whether it can offer "browse your
+    // GitHub repos" without a failed round trip — true only when a GitHub
+    // identity with a stored token actually exists for this user.
+    const githubConnected = Boolean(getOauthIdentityForUser(db, user.id, "github")?.access_token_enc);
+    return reply.status(200).send({ authRequired, user: { ...publicUser(user), githubConnected } });
   });
 
   /**
