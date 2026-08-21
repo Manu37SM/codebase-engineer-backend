@@ -51,7 +51,19 @@ function listTouchedPaths(diffText: string): string[] {
   } catch (err) {
     const stderr =
       err && typeof err === "object" && "stderr" in err ? String((err as { stderr: unknown }).stderr ?? "") : "";
-    throw new PatchZipExportError(`Could not read which files this patch touches: ${stderr.trim() || (err as Error).message}`);
+    const gitMessage = stderr.trim() || (err as Error).message;
+    // "No valid patches in input" specifically means git couldn't find
+    // anything shaped like a unified diff at all — not "the diff doesn't
+    // apply cleanly" (a different, later failure). By design (see
+    // generatePatch.ts's doc comment), the AI's raw response is stored as
+    // diff_text unvalidated, so this is almost always the model having
+    // responded with prose, an explicit "NO_PATCH: ..." decline, or a
+    // diff wrapped in markdown fences instead of a real diff — something
+    // the reviewer should reject rather than something to debug here.
+    const hint = gitMessage.includes("No valid patches in input")
+      ? " This usually means the AI's response for this patch wasn't a real diff (see the raw text shown above the patch) — reject it and try regenerating, possibly with a different provider."
+      : "";
+    throw new PatchZipExportError(`Could not read which files this patch touches: ${gitMessage}${hint}`);
   }
 
   return output

@@ -67,7 +67,17 @@ function runGitApply(projectRoot: string, diffText: string, dryRun: boolean): Ap
       err && typeof err === "object" && "stderr" in err
         ? String((err as { stderr: unknown }).stderr ?? "")
         : "";
-    const message = stderr.trim() || (err instanceof Error ? err.message : "git apply failed");
+    let message = stderr.trim() || (err instanceof Error ? err.message : "git apply failed");
+    // "No valid patches in input" means git couldn't find anything
+    // diff-shaped at all — not "the diff doesn't apply cleanly" (a
+    // different failure this same catch also handles). Since diff_text is
+    // stored unvalidated straight from the AI's raw response (see
+    // generatePatch.ts's doc comment), this almost always means the model
+    // responded with prose, an explicit "NO_PATCH: ..." decline, or a diff
+    // wrapped in markdown fences instead of a real diff.
+    if (message.includes("No valid patches in input")) {
+      message += " This usually means the AI's response for this patch wasn't a real diff (see the raw text shown for it) — reject it and try regenerating, possibly with a different provider.";
+    }
     return { success: false, error: message.slice(0, MAX_ERROR_LENGTH) };
   }
 }
