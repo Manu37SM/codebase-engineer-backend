@@ -27,9 +27,9 @@ export function getOrCreateSubscription(db: DB): SubscriptionRecord {
 
 export interface ActivateSubscriptionInput {
   tier: Tier;
-  razorpayOrderId: string;
-  razorpayPaymentId: string;
-  /** ISO timestamp — one calendar month from activation, per this module's simple non-recurring-billing model (see routes/billing.ts's doc comment on why a real recurring subscription isn't implemented in this phase). */
+  dodoSubscriptionId: string;
+  dodoPaymentId: string | null;
+  /** ISO timestamp — from Dodo's `next_billing_date` when the webhook payload includes one, otherwise a 30-day fallback computed in routes/billing.ts. */
   currentPeriodEnd: string;
 }
 
@@ -37,14 +37,23 @@ export function activateSubscription(db: DB, input: ActivateSubscriptionInput): 
   getOrCreateSubscription(db); // ensures the singleton row exists first
   db.prepare(
     `UPDATE subscription
-     SET tier = ?, status = 'active', razorpay_order_id = ?, razorpay_payment_id = ?,
+     SET tier = ?, status = 'active', dodo_subscription_id = ?, dodo_payment_id = ?,
          current_period_end = ?, updated_at = datetime('now')
      WHERE id = ?`
-  ).run(input.tier, input.razorpayOrderId, input.razorpayPaymentId, input.currentPeriodEnd, SINGLETON_ID);
+  ).run(input.tier, input.dodoSubscriptionId, input.dodoPaymentId, input.currentPeriodEnd, SINGLETON_ID);
   return db.prepare("SELECT * FROM subscription WHERE id = ?").get(SINGLETON_ID) as SubscriptionRecord;
 }
 
-/** Downgrades back to `free` once a paid period lapses — called by usageLimiter.ts when `current_period_end` has passed, not by any timer/cron (this app has none). */
+/** Called on a `subscription.cancelled` webhook — downgrades to `free` immediately rather than waiting for `current_period_end`, matching Dodo's own subscription-cancelled state rather than this app inventing a separate "cancels at period end" grace state it would then have to track. */
+export function deactivateSubscription(db: DB): SubscriptionRecord {
+  getOrCreateSubscription(db);
+  db.prepare(
+    `UPDATE subscription SET tier = 'free', status = 'inactive', updated_at = datetime('now') WHERE id = ?`
+  ).run(SINGLETON_ID);
+  return db.prepare("SELECT * FROM subscription WHERE id = ?").get(SINGLETON_ID) as SubscriptionRecord;
+}
+
+/** Downgrades back to `free` once a paid period lapses without a renewal webhook ever arriving — a safety net (`usageLimiter.ts` calls this on every check), not the primary way a subscription ends; `subscription.cancelled` handling above is. Not called by any timer/cron (this app has none). */
 export function expireSubscriptionIfPastPeriod(db: DB, now: string): SubscriptionRecord {
   const sub = getOrCreateSubscription(db);
   if (sub.tier === "pro" && sub.current_period_end && sub.current_period_end < now) {
@@ -56,21 +65,21 @@ export function expireSubscriptionIfPastPeriod(db: DB, now: string): Subscriptio
   return sub;
 }
 
-/** Idempotent webhook-event recording — returns `true` if this is the first time this Razorpay event id has been seen, `false` if it's a redelivery (Razorpay redelivers on a non-2xx response or timeout, so a real handler must tolerate seeing the same event id more than once). */
+/** Idempotent webhook-event recording — returns `true` if this is the first time this Dodo event id (the `webhook-id` header) has been seen, `false` if it's a redelivery (Dodo, like most payment providers, redelivers on a non-2xx response or timeout, so a real handler must tolerate seeing the same event id more than once). */
 export function recordWebhookEventIfNew(
   db: DB,
   id: string,
-  razorpayEventId: string,
+  dodoEventId: string,
   eventType: string,
   payload: string
 ): boolean {
   const existing = db
-    .prepare("SELECT id FROM billing_webhook_event WHERE razorpay_event_id = ?")
-    .get(razorpayEventId);
+    .prepare("SELECT id FROM billing_webhook_event WHERE dodo_event_id = ?")
+    .get(dodoEventId);
   if (existing) return false;
 
   db.prepare(
-    `INSERT INTO billing_webhook_event (id, razorpay_event_id, event_type, payload) VALUES (?, ?, ?, ?)`
-  ).run(id, razorpayEventId, eventType, payload);
+    `INSERT INTO billing_webhook_event (id, dodo_event_id, event_type, payload) VALUES (?, ?, ?, ?)`
+  ).run(id, dodoEventId, eventType, payload);
   return true;
 }

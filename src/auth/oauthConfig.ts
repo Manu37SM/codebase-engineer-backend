@@ -5,7 +5,7 @@
  * provider isn't (fully) configured, so the `/start` route for that
  * provider can return a clear "not configured" response instead of the
  * server crashing on startup — same "additive, never a hard requirement"
- * shape as Razorpay billing (`billing/config.ts`) and Turnstile
+ * shape as Dodo Payments billing (`billing/config.ts`) and Turnstile
  * (`auth/turnstile.ts`).
  */
 

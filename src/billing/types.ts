@@ -31,8 +31,8 @@ export interface SubscriptionRecord {
   id: string;
   tier: Tier;
   status: "active" | "inactive";
-  razorpay_order_id: string | null;
-  razorpay_payment_id: string | null;
+  dodo_subscription_id: string | null;
+  dodo_payment_id: string | null;
   current_period_end: string | null;
   created_at: string;
   updated_at: string;

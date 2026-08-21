@@ -9,12 +9,12 @@ import { replaceProjectFindings } from "../src/db/findingRepo.js";
 import { checkAiOperationAllowed, getMonthlyAiOperationCount } from "../src/billing/usageLimiter.js";
 import { activateSubscription } from "../src/billing/subscriptionRepo.js";
 
-const RAZORPAY_ENV_KEYS = ["RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET", "RAZORPAY_WEBHOOK_SECRET"] as const;
+const DODO_ENV_KEYS = ["DODO_PAYMENTS_API_KEY", "DODO_PAYMENTS_WEBHOOK_KEY", "DODO_PRODUCT_ID"] as const;
 
 function setBillingConfigured() {
-  process.env.RAZORPAY_KEY_ID = "rzp_test_key";
-  process.env.RAZORPAY_KEY_SECRET = "rzp_test_secret";
-  process.env.RAZORPAY_WEBHOOK_SECRET = "whsec_test";
+  process.env.DODO_PAYMENTS_API_KEY = "dodo_test_key";
+  process.env.DODO_PAYMENTS_WEBHOOK_KEY = "whsec_dGVzdA==";
+  process.env.DODO_PRODUCT_ID = "prod_test_pro";
 }
 
 describe("usageLimiter", () => {
@@ -25,8 +25,8 @@ describe("usageLimiter", () => {
   let savedEnv: Record<string, string | undefined>;
 
   beforeEach(() => {
-    savedEnv = Object.fromEntries(RAZORPAY_ENV_KEYS.map((k) => [k, process.env[k]]));
-    for (const k of RAZORPAY_ENV_KEYS) delete process.env[k];
+    savedEnv = Object.fromEntries(DODO_ENV_KEYS.map((k) => [k, process.env[k]]));
+    for (const k of DODO_ENV_KEYS) delete process.env[k];
 
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ce-usage-limiter-test-"));
     db = openDatabase(path.join(tmpDir, "test.db"));
@@ -55,7 +55,7 @@ describe("usageLimiter", () => {
   });
 
   afterEach(() => {
-    for (const k of RAZORPAY_ENV_KEYS) {
+    for (const k of DODO_ENV_KEYS) {
       if (savedEnv[k] === undefined) delete process.env[k];
       else process.env[k] = savedEnv[k];
     }
@@ -71,7 +71,7 @@ describe("usageLimiter", () => {
     ).run(id, projectId, findingId, createdAt);
   }
 
-  it("always allows when billing is not configured (no RAZORPAY_* env vars set)", () => {
+  it("always allows when billing is not configured (no DODO_* env vars set)", () => {
     for (let i = 0; i < 100; i++) insertAiRequest(new Date().toISOString());
     const result = checkAiOperationAllowed(db);
     expect(result.allowed).toBe(true);
@@ -120,8 +120,8 @@ describe("usageLimiter", () => {
     const now = new Date().toISOString();
     activateSubscription(db, {
       tier: "pro",
-      razorpayOrderId: "order_x",
-      razorpayPaymentId: "pay_x",
+      dodoSubscriptionId: "sub_x",
+      dodoPaymentId: "pay_x",
       currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
     });
     for (let i = 0; i < 200; i++) insertAiRequest(now);
@@ -137,8 +137,8 @@ describe("usageLimiter", () => {
     const now = new Date().toISOString();
     activateSubscription(db, {
       tier: "pro",
-      razorpayOrderId: "order_x",
-      razorpayPaymentId: "pay_x",
+      dodoSubscriptionId: "sub_x",
+      dodoPaymentId: "pay_x",
       currentPeriodEnd: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), // already expired
     });
     for (let i = 0; i < 50; i++) insertAiRequest(now);

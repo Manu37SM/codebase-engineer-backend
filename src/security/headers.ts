@@ -12,13 +12,17 @@ import type { FastifyInstance } from "fastify";
  * scripts, or send cross-origin fetches from the browser — its own
  * frontend and API are always same-origin (see docs/DEPLOYMENT.md: no
  * CORS headers are set anywhere in this codebase for the same reason).
- * The Cloudflare Turnstile widget (frontend/src/components/TurnstileWidget.tsx)
- * and the Razorpay Checkout script (frontend/index.html) are both wired in
- * end-to-end now, so their specific origins are allow-listed below rather
- * than left as a "you'll need to extend this" note — both stay inert
- * (script never loads/executes anything) unless an operator actually sets
- * VITE_TURNSTILE_SITE_KEY / RAZORPAY_KEY_ID etc., so this doesn't loosen
- * the policy for installs that leave those features off.
+ * The Cloudflare Turnstile widget (frontend/src/components/Turnstile.tsx)
+ * is wired in end-to-end, so its specific origin is allow-listed below
+ * rather than left as a "you'll need to extend this" note — it stays
+ * inert (script never loads/executes anything) unless an operator
+ * actually sets VITE_TURNSTILE_SITE_KEY, so this doesn't loosen the
+ * policy for installs that leave that feature off. Billing (Dodo
+ * Payments) needs no CSP allow-listing at all — its checkout is a
+ * separate hosted page reached via a plain top-level browser navigation
+ * (`window.location.href = checkoutUrl`, see frontend/src/pages/Billing.tsx),
+ * never embedded as a same-page script/iframe/fetch the way the earlier
+ * Razorpay Checkout widget was.
  */
 export function registerSecurityHeaders(app: FastifyInstance): void {
   app.addHook("onSend", async (request, reply) => {
@@ -30,15 +34,14 @@ export function registerSecurityHeaders(app: FastifyInstance): void {
       "Content-Security-Policy",
       [
         "default-src 'self'",
-        "script-src 'self' https://challenges.cloudflare.com https://checkout.razorpay.com",
+        "script-src 'self' https://challenges.cloudflare.com",
         "style-src 'self' 'unsafe-inline'", // React/Tailwind utility classes don't need this, but some component libraries set inline style attributes — inline style ATTRIBUTES aren't blocked by CSP either way; this only covers <style> tags, kept for safety.
-        "img-src 'self' data: https://*.razorpay.com",
+        "img-src 'self' data:",
         "font-src 'self'",
-        // Turnstile's own script makes XHR calls back to challenges.cloudflare.com,
-        // and Razorpay Checkout talks to api.razorpay.com (order status, payment methods, etc.).
-        "connect-src 'self' https://challenges.cloudflare.com https://api.razorpay.com https://lumberjack.razorpay.com",
-        // Turnstile renders its challenge in an iframe; Razorpay Checkout opens one too.
-        "frame-src https://challenges.cloudflare.com https://api.razorpay.com https://checkout.razorpay.com",
+        // Turnstile's own script makes XHR calls back to challenges.cloudflare.com.
+        "connect-src 'self' https://challenges.cloudflare.com",
+        // Turnstile renders its challenge in an iframe.
+        "frame-src https://challenges.cloudflare.com",
         "object-src 'none'",
         "base-uri 'self'",
         "frame-ancestors 'none'",

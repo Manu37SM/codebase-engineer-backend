@@ -7,6 +7,7 @@ import { openDatabase, DB } from "../src/db/index.js";
 import {
   getOrCreateSubscription,
   activateSubscription,
+  deactivateSubscription,
   expireSubscriptionIfPastPeriod,
   recordWebhookEventIfNew,
 } from "../src/billing/subscriptionRepo.js";
@@ -41,14 +42,14 @@ describe("subscriptionRepo", () => {
     const periodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     const sub = activateSubscription(db, {
       tier: "pro",
-      razorpayOrderId: "order_abc",
-      razorpayPaymentId: "pay_xyz",
+      dodoSubscriptionId: "sub_abc",
+      dodoPaymentId: "pay_xyz",
       currentPeriodEnd: periodEnd,
     });
     expect(sub.tier).toBe("pro");
     expect(sub.status).toBe("active");
-    expect(sub.razorpay_order_id).toBe("order_abc");
-    expect(sub.razorpay_payment_id).toBe("pay_xyz");
+    expect(sub.dodo_subscription_id).toBe("sub_abc");
+    expect(sub.dodo_payment_id).toBe("pay_xyz");
     expect(sub.current_period_end).toBe(periodEnd);
   });
 
@@ -56,8 +57,8 @@ describe("subscriptionRepo", () => {
     const pastPeriodEnd = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     activateSubscription(db, {
       tier: "pro",
-      razorpayOrderId: "order_abc",
-      razorpayPaymentId: "pay_xyz",
+      dodoSubscriptionId: "sub_abc",
+      dodoPaymentId: "pay_xyz",
       currentPeriodEnd: pastPeriodEnd,
     });
 
@@ -70,8 +71,8 @@ describe("subscriptionRepo", () => {
     const futurePeriodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     activateSubscription(db, {
       tier: "pro",
-      razorpayOrderId: "order_abc",
-      razorpayPaymentId: "pay_xyz",
+      dodoSubscriptionId: "sub_abc",
+      dodoPaymentId: "pay_xyz",
       currentPeriodEnd: futurePeriodEnd,
     });
 
@@ -80,11 +81,25 @@ describe("subscriptionRepo", () => {
     expect(stillActive.status).toBe("active");
   });
 
+  it("deactivates a pro subscription back to free immediately on cancellation", () => {
+    const futurePeriodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    activateSubscription(db, {
+      tier: "pro",
+      dodoSubscriptionId: "sub_abc",
+      dodoPaymentId: "pay_xyz",
+      currentPeriodEnd: futurePeriodEnd,
+    });
+
+    const cancelled = deactivateSubscription(db);
+    expect(cancelled.tier).toBe("free");
+    expect(cancelled.status).toBe("inactive");
+  });
+
   it("records a webhook event once and reports redeliveries as not-new", () => {
-    const firstTime = recordWebhookEventIfNew(db, randomUUID(), "evt_123", "payment.captured", "{}");
+    const firstTime = recordWebhookEventIfNew(db, randomUUID(), "evt_123", "subscription.active", "{}");
     expect(firstTime).toBe(true);
 
-    const redelivery = recordWebhookEventIfNew(db, randomUUID(), "evt_123", "payment.captured", "{}");
+    const redelivery = recordWebhookEventIfNew(db, randomUUID(), "evt_123", "subscription.active", "{}");
     expect(redelivery).toBe(false);
 
     const count = db.prepare("SELECT COUNT(*) as c FROM billing_webhook_event").get() as { c: number };

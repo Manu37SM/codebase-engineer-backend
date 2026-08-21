@@ -12,7 +12,7 @@ import { buildApp } from "./app.js";
 // `config.ts` and `billing/config.ts` both read `process.env` at call
 // time, so `.env` has to be loaded before `loadConfig()` runs below. See
 // `.env.example` for every variable this server reads, including the
-// optional `RAZORPAY_*` ones (docs/MONETIZATION.md §6 has full setup
+// optional `DODO_PAYMENTS_*` ones (docs/MONETIZATION.md §6 has full setup
 // instructions).
 async function main() {
   const config = loadConfig();
