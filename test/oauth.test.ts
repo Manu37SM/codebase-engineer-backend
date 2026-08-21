@@ -203,4 +203,108 @@ describe("OAuth sign-in (Google + GitHub)", () => {
       expect(identity!.access_token_enc).not.toContain("fake-github-access-token");
     });
   });
+
+  describe("account linking when completing a second provider's flow while already signed in", () => {
+    // Regression coverage for a real reported bug: completing GitHub OAuth
+    // while already signed in via Google (or vice versa — e.g. clicking
+    // "Connect Google" from the repo-register form's Google Drive tab
+    // while signed in with GitHub) used to silently switch the active
+    // session onto a *different* account instead of linking the new
+    // provider onto the one already signed in. See the doc comments in
+    // routes/oauthGoogle.ts and routes/oauthGithub.ts.
+    beforeEach(() => {
+      process.env.GOOGLE_CLIENT_ID = "test-google-client-id";
+      process.env.GOOGLE_CLIENT_SECRET = "test-google-client-secret";
+      process.env.GITHUB_CLIENT_ID = "test-github-client-id";
+      process.env.GITHUB_CLIENT_SECRET = "test-github-client-secret";
+    });
+
+    it("connecting Google while already signed in via GitHub links Google onto the same account, without switching sessions", async () => {
+      global.fetch = fakeFetchResponding({
+        "github.com/login/oauth/access_token": { access_token: "gh-access-token" },
+        "api.github.com/user": { id: 111, login: "linker", name: "Linker", email: "linker@example.com" },
+        "oauth2.googleapis.com/token": { access_token: "google-access-token", refresh_token: "google-refresh" },
+        // Deliberately a *different* email than the GitHub account — if
+        // linking regressed back to "match/create by email", this would
+        // prove it by creating a second user instead of reusing the first.
+        "googleapis.com/oauth2/v3/userinfo": { sub: "google-999", email: "different-email@example.com" },
+      }) as unknown as typeof fetch;
+
+      const githubStart = await app.inject({ method: "GET", url: "/api/v1/auth/github/start" });
+      const githubState = extractCookieValue(githubStart.headers["set-cookie"], "ce_oauth_state_github");
+      const githubCallback = await app.inject({
+        method: "GET",
+        url: `/api/v1/auth/github/callback?code=c&state=${githubState}`,
+        headers: { cookie: `ce_oauth_state_github=${githubState}` },
+      });
+      const sessionCookie = extractCookieValue(githubCallback.headers["set-cookie"], "ce_session");
+      expect(sessionCookie).toBeTruthy();
+      const githubUser = getUserByEmail(db, "linker@example.com");
+      expect(githubUser).toBeTruthy();
+
+      const googleStart = await app.inject({
+        method: "GET",
+        url: "/api/v1/auth/google/start",
+        headers: { cookie: `ce_session=${sessionCookie}` },
+      });
+      const googleState = extractCookieValue(googleStart.headers["set-cookie"], "ce_oauth_state_google");
+      const googleCallback = await app.inject({
+        method: "GET",
+        url: `/api/v1/auth/google/callback?code=c&state=${googleState}`,
+        headers: { cookie: `ce_oauth_state_google=${googleState}; ce_session=${sessionCookie}` },
+      });
+      expect(googleCallback.statusCode).toBe(302);
+
+      // Linking onto the already-active account shouldn't mint/overwrite
+      // the session cookie — the browser was already signed in.
+      expect(extractCookieValue(googleCallback.headers["set-cookie"], "ce_session")).toBeNull();
+
+      // The Google identity is attached to the *same* user the GitHub
+      // sign-in created — no second account for the different email.
+      const googleIdentity = getOauthIdentity(db, "google", "google-999");
+      expect(googleIdentity).toBeTruthy();
+      expect(googleIdentity!.user_id).toBe(githubUser!.id);
+      expect(getUserByEmail(db, "different-email@example.com")).toBeUndefined();
+    });
+
+    it("connecting GitHub while already signed in via Google links GitHub onto the same account", async () => {
+      global.fetch = fakeFetchResponding({
+        "oauth2.googleapis.com/token": { access_token: "google-access-token", refresh_token: "google-refresh" },
+        "googleapis.com/oauth2/v3/userinfo": { sub: "google-222", email: "googler@example.com", name: "Googler" },
+        "github.com/login/oauth/access_token": { access_token: "gh-access-token" },
+        "api.github.com/user": { id: 333, login: "other-login", name: "Other", email: "unrelated@example.com" },
+      }) as unknown as typeof fetch;
+
+      const googleStart = await app.inject({ method: "GET", url: "/api/v1/auth/google/start" });
+      const googleState = extractCookieValue(googleStart.headers["set-cookie"], "ce_oauth_state_google");
+      const googleCallback = await app.inject({
+        method: "GET",
+        url: `/api/v1/auth/google/callback?code=c&state=${googleState}`,
+        headers: { cookie: `ce_oauth_state_google=${googleState}` },
+      });
+      const sessionCookie = extractCookieValue(googleCallback.headers["set-cookie"], "ce_session");
+      expect(sessionCookie).toBeTruthy();
+      const googleUser = getUserByEmail(db, "googler@example.com");
+      expect(googleUser).toBeTruthy();
+
+      const githubStart = await app.inject({
+        method: "GET",
+        url: "/api/v1/auth/github/start",
+        headers: { cookie: `ce_session=${sessionCookie}` },
+      });
+      const githubState = extractCookieValue(githubStart.headers["set-cookie"], "ce_oauth_state_github");
+      const githubCallback = await app.inject({
+        method: "GET",
+        url: `/api/v1/auth/github/callback?code=c&state=${githubState}`,
+        headers: { cookie: `ce_oauth_state_github=${githubState}; ce_session=${sessionCookie}` },
+      });
+      expect(githubCallback.statusCode).toBe(302);
+      expect(extractCookieValue(githubCallback.headers["set-cookie"], "ce_session")).toBeNull();
+
+      const githubIdentity = getOauthIdentity(db, "github", "333");
+      expect(githubIdentity).toBeTruthy();
+      expect(githubIdentity!.user_id).toBe(googleUser!.id);
+      expect(getUserByEmail(db, "unrelated@example.com")).toBeUndefined();
+    });
+  });
 });

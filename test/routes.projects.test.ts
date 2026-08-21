@@ -1314,6 +1314,13 @@ describe("projects API", () => {
       payload: { name: "patch-fixture-" + randomUUID(), rootPath: repoRoot },
     });
     const { project } = createRes.json();
+    // New projects default to apply_mode "download" (bugfix, Aug 2026 —
+    // see db/projectRepo.ts's createProject doc comment): this helper's
+    // own callers mostly exercise the "direct" write path, so set it
+    // explicitly here rather than relying on a DB default. The one test
+    // that specifically covers "download" mode (Task #90) overrides this
+    // back to "download" itself afterward.
+    await app.inject({ method: "PATCH", url: `/api/v1/projects/${project.id}/settings`, payload: { applyMode: "direct" } });
     await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/discover` });
     await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/index` });
     await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/analysis` });

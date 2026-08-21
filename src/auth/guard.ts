@@ -41,6 +41,28 @@ function isPublicPath(url: string): boolean {
   return PUBLIC_PATH_PREFIXES.some((prefix) => url.startsWith(prefix));
 }
 
+/**
+ * Reads the session cookie directly and resolves the already-logged-in
+ * user, if any — used by the OAuth callback routes (`oauthGoogle.ts`,
+ * `oauthGithub.ts`), which live under the public `/api/v1/auth/` prefix
+ * and therefore never go through `authGuard` above (that would be a
+ * chicken-and-egg deadlock for the login flow itself). Those callbacks
+ * need to know "is this browser already signed in?" so that completing a
+ * *second* provider's OAuth flow (e.g. clicking "Connect Google" for
+ * Drive access while already signed in via GitHub) links the new
+ * provider identity onto the *same* account instead of silently signing
+ * the browser into a different one — see the doc comment above each
+ * callback's linking logic for the bug this fixes.
+ */
+export function resolveCurrentUserId(request: FastifyRequest, db: DB): string | undefined {
+  const token = request.cookies?.[SESSION_COOKIE_NAME];
+  if (!token) return undefined;
+  const session = getSessionByToken(db, token);
+  if (!session) return undefined;
+  const user = getUserById(db, session.user_id);
+  return user?.id;
+}
+
 export function authGuard(db: DB) {
   return function guard(request: FastifyRequest, reply: FastifyReply, done: (err?: Error) => void) {
     if (isPublicPath(request.raw.url ?? request.url)) {

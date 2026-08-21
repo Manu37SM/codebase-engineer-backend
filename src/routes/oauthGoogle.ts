@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type { DB } from "../db/index.js";
 import { getGoogleOAuthConfig } from "../auth/oauthConfig.js";
 import { beginOAuthState, verifyAndClearOAuthState } from "../auth/oauthState.js";
+import { resolveCurrentUserId } from "../auth/guard.js";
 import { setSessionCookie } from "../auth/session.js";
 import { encryptToken } from "../auth/crypto.js";
 import {
@@ -134,6 +135,19 @@ export function registerGoogleOAuthRoutes(app: FastifyInstance, { db }: Register
       return reply.status(502).send({ error: "Google did not return a stable account id." });
     }
 
+    // Bug fix: previously this callback always ran a plain "sign in" (match
+    // by email or create a new user, then overwrite the session cookie) —
+    // so clicking "Connect Google" for Drive access *while already signed
+    // in via GitHub* silently swapped the active session onto a different
+    // (or brand-new) account, which is exactly what the user reported as
+    // "logs in Google and logs out of GitHub and vice versa", and is also
+    // why the Drive file picker looked like it hung: the browser had been
+    // switched onto an account whose `driveConnected` the already-rendered
+    // UI never knew to re-check. Fix: if this browser already has a valid
+    // session, treat this as *linking* Google (and its Drive scope) onto
+    // the currently signed-in account instead of switching accounts.
+    const currentUserId = resolveCurrentUserId(request, db);
+
     let identity = getOauthIdentity(db, "google", userInfo.sub);
     let userId: string;
 
@@ -148,12 +162,27 @@ export function registerGoogleOAuthRoutes(app: FastifyInstance, { db }: Register
         encryptToken(tokenBody.access_token),
         tokenBody.refresh_token ? encryptToken(tokenBody.refresh_token) : null
       );
+    } else if (currentUserId) {
+      // Already signed in and this Google account isn't linked to anyone
+      // yet — attach it to the *current* account rather than matching by
+      // email or creating a separate one.
+      userId = currentUserId;
+      const email = userInfo.email?.toLowerCase() ?? null;
+      createOauthIdentity(db, randomUUID(), {
+        userId,
+        provider: "google",
+        providerUserId: userInfo.sub,
+        email,
+        accessTokenEnc: encryptToken(tokenBody.access_token),
+        refreshTokenEnc: tokenBody.refresh_token ? encryptToken(tokenBody.refresh_token) : null,
+      });
     } else {
-      // No identity linked yet — link to an existing local account with the
-      // same email if one exists (so someone who registered with
-      // alice@example.com/password and later clicks "Sign in with Google"
-      // using the same address lands in the same account), otherwise create
-      // a brand-new passwordless account for this Google identity.
+      // No identity linked yet and no existing session — link to an
+      // existing local account with the same email if one exists (so
+      // someone who registered with alice@example.com/password and later
+      // clicks "Sign in with Google" using the same address lands in the
+      // same account), otherwise create a brand-new passwordless account
+      // for this Google identity.
       const email = userInfo.email?.toLowerCase() ?? null;
       const existingUser = email ? getUserByEmail(db, email) : undefined;
       if (existingUser) {
@@ -176,8 +205,14 @@ export function registerGoogleOAuthRoutes(app: FastifyInstance, { db }: Register
       });
     }
 
-    const sessionToken = createSession(db, randomUUID(), userId);
-    setSessionCookie(request, reply, sessionToken);
+    // Only mint/overwrite the session cookie when the account we ended up
+    // on differs from (or there wasn't) an existing session — linking onto
+    // the already-active account should leave that session exactly as it
+    // was, not churn a new token for no reason.
+    if (userId !== currentUserId) {
+      const sessionToken = createSession(db, randomUUID(), userId);
+      setSessionCookie(request, reply, sessionToken);
+    }
 
     // Redirect back into the SPA rather than returning JSON — this is a
     // real browser navigation (the user just came back from Google's

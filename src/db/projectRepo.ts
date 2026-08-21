@@ -8,7 +8,16 @@ export interface ProjectRecord {
   name: string;
   root_path: string;
   created_at: string;
-  /** Task #90: whether an approved AI-Mode patch is written straight to disk ("direct", the default) or packaged as a downloadable zip instead ("download"). */
+  /**
+   * Task #90: whether an approved AI-Mode patch is written straight to
+   * disk ("direct") or packaged as a downloadable zip instead
+   * ("download"). New projects default to "download" (see createProject
+   * below) — this instance runs on a remote server, so "direct" would
+   * write the patch into the *server's* filesystem, not the user's own
+   * machine, which is useless for a self-hosted deployment someone
+   * reaches over the network. "direct" is still fully supported for a
+   * genuinely local install (the app run on your own machine).
+   */
   apply_mode: ApplyMode;
 }
 
@@ -26,7 +35,7 @@ export interface RepositorySnapshotRecord {
 
 export function createProject(db: DB, id: string, name: string, rootPath: string): ProjectRecord {
   db.prepare(
-    "INSERT INTO project (id, name, root_path) VALUES (?, ?, ?)"
+    "INSERT INTO project (id, name, root_path, apply_mode) VALUES (?, ?, ?, 'download')"
   ).run(id, name, rootPath);
   return getProjectById(db, id)!;
 }

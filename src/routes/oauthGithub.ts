@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type { DB } from "../db/index.js";
 import { getGitHubOAuthConfig } from "../auth/oauthConfig.js";
 import { beginOAuthState, verifyAndClearOAuthState } from "../auth/oauthState.js";
+import { resolveCurrentUserId } from "../auth/guard.js";
 import { setSessionCookie } from "../auth/session.js";
 import { encryptToken } from "../auth/crypto.js";
 import {
@@ -146,6 +147,13 @@ export function registerGitHubOAuthRoutes(app: FastifyInstance, { db }: Register
       }
     }
 
+    // See the matching comment in oauthGoogle.ts's callback: previously
+    // this always ran a plain "sign in", so completing GitHub's OAuth flow
+    // while already signed in via Google (or vice versa) silently swapped
+    // the active session onto a different account. Fix: link onto the
+    // currently signed-in account when one exists, instead of switching.
+    const currentUserId = resolveCurrentUserId(request, db);
+
     const providerUserId = String(userInfo.id);
     let identity = getOauthIdentity(db, "github", providerUserId);
     let userId: string;
@@ -156,6 +164,19 @@ export function registerGitHubOAuthRoutes(app: FastifyInstance, { db }: Register
       // no refresh_token to update here — just the (possibly regenerated)
       // access token.
       updateOauthTokens(db, identity.id, encryptToken(tokenBody.access_token), null);
+    } else if (currentUserId) {
+      // Already signed in and this GitHub account isn't linked to anyone
+      // yet — attach it (and its repo-browsing token) to the *current*
+      // account rather than matching by email or creating a separate one.
+      userId = currentUserId;
+      createOauthIdentity(db, randomUUID(), {
+        userId,
+        provider: "github",
+        providerUserId,
+        email,
+        accessTokenEnc: encryptToken(tokenBody.access_token),
+        refreshTokenEnc: null,
+      });
     } else {
       const existingUser = email ? getUserByEmail(db, email) : undefined;
       if (existingUser) {
@@ -178,8 +199,13 @@ export function registerGitHubOAuthRoutes(app: FastifyInstance, { db }: Register
       });
     }
 
-    const sessionToken = createSession(db, randomUUID(), userId);
-    setSessionCookie(request, reply, sessionToken);
+    // Only mint/overwrite the session cookie when the account we ended up
+    // on differs from (or there wasn't) an existing session — see the
+    // matching comment in oauthGoogle.ts's callback.
+    if (userId !== currentUserId) {
+      const sessionToken = createSession(db, randomUUID(), userId);
+      setSessionCookie(request, reply, sessionToken);
+    }
 
     return reply.redirect("/");
   });
