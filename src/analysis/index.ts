@@ -7,6 +7,8 @@ import { secretSmellRule } from "./rules/secretSmell.js";
 import { envFileCommittedRule } from "./rules/envFileCommitted.js";
 import { permissiveCorsRule } from "./rules/permissiveCors.js";
 import { disabledTlsVerificationRule } from "./rules/disabledTlsVerification.js";
+import { missingReadmeRule } from "./rules/missingReadme.js";
+import { unpinnedDependencyRule } from "./rules/unpinnedDependency.js";
 import type { Finding } from "./types.js";
 
 export type { Finding, Severity, FindingCategory } from "./types.js";
@@ -19,7 +21,19 @@ export const SECURITY_RULES = [
   disabledTlsVerificationRule,
 ];
 
-const RULES = [largeFileRule, largeFunctionRule, todoFixmeRule, missingTestsRule, ...SECURITY_RULES];
+const RULES = [
+  largeFileRule,
+  largeFunctionRule,
+  todoFixmeRule,
+  missingTestsRule,
+  ...SECURITY_RULES,
+  // Two new categories (documentation, dependencies) — the Findings page's
+  // category filter previously only ever had three options
+  // (maintainability/testing/security) because those were the only
+  // categories any rule could ever produce.
+  missingReadmeRule,
+  unpinnedDependencyRule,
+];
 
 export interface AnalysisResult {
   findings: Finding[];

@@ -1,5 +1,5 @@
 export type Severity = "critical" | "high" | "medium" | "low";
-export type FindingCategory = "maintainability" | "testing" | "security";
+export type FindingCategory = "maintainability" | "testing" | "security" | "documentation" | "dependencies";
 
 export interface Finding {
   /** Stable within a single analysis run — not a DB id (the repo layer assigns those). */

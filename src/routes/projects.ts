@@ -821,6 +821,141 @@ export function registerProjectsRoutes(
     }
   });
 
+  // --- "Fix all findings" (Pro tier only) -----------------------------------
+  //
+  // Per the user's explicit request: a bulk action on the Findings page that
+  // runs the plan → create patch → approve → generate-diff pipeline for
+  // every findable-but-not-yet-patched finding in one call, gated to Pro
+  // subscribers (checkAiOperationAllowed's `tier` — the same field the
+  // Billing page already reads). Still stops at a real diff ('proposed'
+  // status): the second human-approval gate (approve-apply) and the actual
+  // disk write (/apply, or the download-zip flow) are deliberately left
+  // fully manual, same as every single-finding patch — this automates away
+  // the repetitive "generate a plan, create a patch, approve it, generate
+  // the diff" clicking, not the actual "let this touch my files" decision.
+  const FIX_ALL_MAX_FINDINGS = 50; // safety cap — see the `skipped` field in the response for anything left over
+
+  app.post("/api/v1/projects/:id/findings/fix-all", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const usageCheck = checkAiOperationAllowed(db);
+    if (usageCheck.tier !== "pro") {
+      return reply
+        .status(403)
+        .send({ error: "Fixing all findings at once is a Pro-tier feature. Upgrade to Pro in Settings to use it." });
+    }
+
+    const body = request.body as { providerId?: string; budgetTokens?: number } | undefined;
+    const resolved = resolveEnabledProvider(db, body);
+    if ("error" in resolved) {
+      return reply.status(resolved.error.status).send({ error: resolved.error.message });
+    }
+    const providerRecord = resolved.provider;
+
+    if (body?.budgetTokens !== undefined && (!Number.isFinite(body.budgetTokens) || body.budgetTokens < 1)) {
+      return reply.status(400).send({ error: "budgetTokens must be a positive integer" });
+    }
+
+    // Only findings with no existing non-rejected patch — a finding someone
+    // already started (or finished) fixing individually isn't re-fixed or
+    // duplicated by this bulk action.
+    const { findings: allFindings } = listFindings(db, id, {});
+    const eligible = allFindings.filter(
+      (f) => !listPatchesForFinding(db, f.id).some((p) => p.status !== "rejected")
+    );
+    const targeted = eligible.slice(0, FIX_ALL_MAX_FINDINGS);
+    const skipped = eligible.length - targeted.length;
+
+    const files = listAllProjectFiles(db, id).map((f) => ({
+      relativePath: f.relative_path,
+      language: f.language,
+      imports: f.imports ? (JSON.parse(f.imports) as string[]) : [],
+      isTest: f.is_test === 1,
+    }));
+
+    const providerConfig = {
+      id: providerRecord.id,
+      name: providerRecord.name,
+      kind: providerRecord.kind,
+      baseUrl: providerRecord.base_url,
+      model: providerRecord.model,
+      apiKey: providerRecord.api_key,
+    };
+
+    let promptTokens = 0;
+    let completionTokens = 0;
+    const results: Array<{ findingId: string; patchId: string | null; error: string | null }> = [];
+
+    // Sequential, not parallel: each iteration is two real AI calls against
+    // the same provider, and running dozens of these concurrently would
+    // just as likely trip the provider's own rate limit as this app's
+    // usage cap — a bulk action failing halfway with a clear per-finding
+    // error list is a far better experience than a burst of simultaneous
+    // 429s. `results` lets the frontend show exactly what happened to each
+    // finding even though this loop keeps going after a single failure.
+    for (const finding of targeted) {
+      try {
+        const planResult = await planFix({
+          db,
+          projectId: id,
+          projectRoot: project.root_path,
+          finding,
+          files,
+          providerConfig,
+          budgetTokens: body?.budgetTokens,
+        });
+        promptTokens += planResult.usage.promptTokens ?? 0;
+        completionTokens += planResult.usage.completionTokens ?? 0;
+
+        const patch = createPatch(db, randomUUID(), {
+          projectId: id,
+          findingId: finding.id,
+          description: planResult.plan.problem ?? null,
+        });
+        createPatchReview(db, randomUUID(), {
+          patchId: patch.id,
+          decision: "approved_for_generation",
+          reviewerNote: "Approved automatically by \"Fix all findings\" (Pro).",
+        });
+        updatePatchStatus(db, patch.id, "approved");
+
+        const patchResult = await generatePatch({
+          db,
+          projectId: id,
+          projectRoot: project.root_path,
+          finding,
+          files,
+          providerConfig,
+          budgetTokens: body?.budgetTokens,
+        });
+        promptTokens += patchResult.usage.promptTokens ?? 0;
+        completionTokens += patchResult.usage.completionTokens ?? 0;
+        setPatchDiff(db, patch.id, patchResult.diffText, "proposed");
+
+        results.push({ findingId: finding.id, patchId: patch.id, error: null });
+      } catch (err) {
+        const message =
+          err instanceof AIProviderError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : "AI provider request failed.";
+        results.push({ findingId: finding.id, patchId: null, error: message });
+      }
+    }
+
+    return reply.status(200).send({
+      attempted: targeted.length,
+      succeeded: results.filter((r) => r.error === null).length,
+      failed: results.filter((r) => r.error !== null).length,
+      skipped,
+      results,
+      usage: { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens },
+    });
+  });
+
   // --- Phase 17: patch generation (diff, human-approved) -------------------
   //
   // The first phase to produce anything that could eventually change a file
@@ -1014,6 +1149,112 @@ export function registerProjectsRoutes(
       }
       return reply.status(502).send({ error: err instanceof Error ? err.message : "AI provider request failed." });
     }
+  });
+
+  // --- "Approve & generate all" (Pro tier only) -----------------------------
+  //
+  // The Changes page's bulk counterpart to /findings/fix-all: instead of
+  // starting from findings, this operates on patches that already exist in
+  // 'pending_approval' (created individually, or by a prior fix-plan run)
+  // and runs the approve → generate-diff step for each, so a Pro user
+  // doesn't have to click "Approve" then "Generate" per row in the queue.
+  // Same Pro gate, same real per-item usage totals, same deliberate stop
+  // short of the second gate (approve-apply / actual disk write).
+  const GENERATE_ALL_MAX_PATCHES = 50;
+
+  app.post("/api/v1/projects/:id/patches/generate-all", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const usageCheck = checkAiOperationAllowed(db);
+    if (usageCheck.tier !== "pro") {
+      return reply
+        .status(403)
+        .send({ error: "Approving and generating all patches at once is a Pro-tier feature. Upgrade to Pro in Settings to use it." });
+    }
+
+    const body = request.body as { providerId?: string; budgetTokens?: number } | undefined;
+    const resolved = resolveEnabledProvider(db, body);
+    if ("error" in resolved) {
+      return reply.status(resolved.error.status).send({ error: resolved.error.message });
+    }
+    const providerRecord = resolved.provider;
+
+    if (body?.budgetTokens !== undefined && (!Number.isFinite(body.budgetTokens) || body.budgetTokens < 1)) {
+      return reply.status(400).send({ error: "budgetTokens must be a positive integer" });
+    }
+
+    const pending = listPatchesForProject(db, id).filter((p) => p.status === "pending_approval");
+    const targeted = pending.slice(0, GENERATE_ALL_MAX_PATCHES);
+    const skipped = pending.length - targeted.length;
+
+    const files = listAllProjectFiles(db, id).map((f) => ({
+      relativePath: f.relative_path,
+      language: f.language,
+      imports: f.imports ? (JSON.parse(f.imports) as string[]) : [],
+      isTest: f.is_test === 1,
+    }));
+
+    const providerConfig = {
+      id: providerRecord.id,
+      name: providerRecord.name,
+      kind: providerRecord.kind,
+      baseUrl: providerRecord.base_url,
+      model: providerRecord.model,
+      apiKey: providerRecord.api_key,
+    };
+
+    let promptTokens = 0;
+    let completionTokens = 0;
+    const results: Array<{ patchId: string; error: string | null }> = [];
+
+    for (const patch of targeted) {
+      try {
+        if (!patch.finding_id) throw new Error("Patch has no associated finding.");
+        const finding = getFindingById(db, patch.finding_id);
+        if (!finding) throw new Error("The patch's finding no longer exists.");
+
+        createPatchReview(db, randomUUID(), {
+          patchId: patch.id,
+          decision: "approved_for_generation",
+          reviewerNote: "Approved automatically by \"Approve & generate all\" (Pro).",
+        });
+        updatePatchStatus(db, patch.id, "approved");
+
+        const patchResult = await generatePatch({
+          db,
+          projectId: id,
+          projectRoot: project.root_path,
+          finding,
+          files,
+          providerConfig,
+          budgetTokens: body?.budgetTokens,
+        });
+        promptTokens += patchResult.usage.promptTokens ?? 0;
+        completionTokens += patchResult.usage.completionTokens ?? 0;
+        setPatchDiff(db, patch.id, patchResult.diffText, "proposed");
+
+        results.push({ patchId: patch.id, error: null });
+      } catch (err) {
+        const message =
+          err instanceof AIProviderError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : "AI provider request failed.";
+        results.push({ patchId: patch.id, error: message });
+      }
+    }
+
+    return reply.status(200).send({
+      attempted: targeted.length,
+      succeeded: results.filter((r) => r.error === null).length,
+      failed: results.filter((r) => r.error !== null).length,
+      skipped,
+      results,
+      usage: { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens },
+    });
   });
 
   // --- Phase 18: diff review, second human-approval gate, and apply --------

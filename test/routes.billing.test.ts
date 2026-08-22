@@ -131,6 +131,31 @@ describe("billing API", () => {
     }
   });
 
+  it("falls back to the real Dodo API base URL when DODO_API_BASE_URL is an empty string, not just when it's unset (regression: deploy/docker-compose.yml's ${VAR:-} passthrough)", async () => {
+    // deploy/docker-compose.yml always passes these through as
+    // `DODO_API_BASE_URL=${DODO_API_BASE_URL:-}`, so on a real deployment
+    // where the operator only sets the three required DODO_* vars, this
+    // process sees `DODO_API_BASE_URL=""` — the literal empty string, not
+    // an unset var. `loadBillingConfig()` used to fall back via `??`,
+    // which only catches `null`/`undefined`, so `apiBaseUrl` silently
+    // became `""` and every checkout call failed with Node's fetch
+    // rejecting a relative URL ("Failed to parse URL from /checkouts")
+    // instead of ever reaching Dodo. This reproduces that exact shape
+    // directly against the pure config loader — no real network call.
+    process.env.DODO_PAYMENTS_API_KEY = "dodo_test_key";
+    process.env.DODO_PAYMENTS_WEBHOOK_KEY = TEST_WEBHOOK_KEY;
+    process.env.DODO_PRODUCT_ID = "prod_test_pro";
+    process.env.DODO_PAYMENTS_ENVIRONMENT = "live_mode";
+    process.env.DODO_API_BASE_URL = "";
+    process.env.DODO_RETURN_URL = "";
+
+    const { loadBillingConfig } = await import("../src/billing/config.js");
+    const config = loadBillingConfig();
+    expect(config).not.toBeNull();
+    expect(config!.apiBaseUrl).toBe("https://live.dodopayments.com");
+    expect(config!.returnUrl).toBe("/settings");
+  });
+
   it("rejects a webhook with an invalid signature", async () => {
     process.env.DODO_PAYMENTS_API_KEY = "dodo_test_key";
     process.env.DODO_PAYMENTS_WEBHOOK_KEY = TEST_WEBHOOK_KEY;

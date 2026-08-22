@@ -59,13 +59,26 @@ export function loadBillingConfig(): BillingConfig | null {
   const environment: "test_mode" | "live_mode" =
     process.env.DODO_PAYMENTS_ENVIRONMENT === "live_mode" ? "live_mode" : "test_mode";
 
+  // `|| undefined` rather than `??`: an *empty string* env var must fall
+  // through to the default too, not just a genuinely-unset one. This bit
+  // in practice — deploy/docker-compose.yml always passes these through as
+  // `${DODO_API_BASE_URL:-}` / `${DODO_RETURN_URL:-}`, so inside the
+  // container `process.env.DODO_API_BASE_URL` is the literal empty string
+  // `""` whenever the operator didn't set it, not `undefined`. `??` only
+  // falls back on `null`/`undefined`, so `apiBaseUrl` silently became `""`
+  // and every checkout call failed with Node's fetch rejecting a relative
+  // URL ("Failed to parse URL from /checkouts") instead of ever reaching
+  // Dodo. `dodoClient.ts` builds requests as `${baseUrl}/checkouts`, so an
+  // empty `apiBaseUrl` is indistinguishable from "unset" and must resolve
+  // the same way.
   return {
     apiKey,
     webhookKey,
     productId,
     environment,
     apiBaseUrl:
-      process.env.DODO_API_BASE_URL ?? (environment === "live_mode" ? LIVE_API_BASE_URL : TEST_API_BASE_URL),
-    returnUrl: process.env.DODO_RETURN_URL ?? "/settings",
+      (process.env.DODO_API_BASE_URL || undefined) ??
+      (environment === "live_mode" ? LIVE_API_BASE_URL : TEST_API_BASE_URL),
+    returnUrl: (process.env.DODO_RETURN_URL || undefined) ?? "/settings",
   };
 }

@@ -183,7 +183,28 @@ export function runTests(
       });
     }
 
-    child.on("error", () => finish(null));
+    child.on("error", (err: NodeJS.ErrnoException) => {
+      // This fires when the OS couldn't even launch the process — most
+      // commonly ENOENT, meaning `detection.command` (e.g. `pytest`,
+      // `mvn`, `go`, `dotnet`, `rspec`) isn't installed in this container
+      // at all. Previously this resolved with empty stdout/stderr and a
+      // null exit code, which the frontend rendered as an opaque "the run
+      // finished (exit code ), but this app doesn't know how to parse
+      // pass/fail counts" — indistinguishable from "the test framework
+      // produced output this app can't parse yet". That was misleading:
+      // the run never actually started, so there was never any output to
+      // parse. Surfacing the real spawn error in `stderr` makes the raw
+      // output panel show the true cause (missing runtime) instead of
+      // nothing, and points at docs/DEPLOYMENT.md, which documents which
+      // language runtimes ship in the default image (Node + git only,
+      // plus Python/pytest as of this fix) and how to extend it for
+      // others (Maven/JDK, Go, .NET, Ruby/RSpec).
+      stderr +=
+        `\n[codebase-engineer] Could not start the test command "${[detection.command, ...detection.args].join(" ")}": ${err.message}\n` +
+        `This almost always means the "${detection.command}" runtime isn't installed in this container image. ` +
+        `See docs/DEPLOYMENT.md for which frameworks are supported out of the box and how to extend the image for others.`;
+      finish(null);
+    });
     child.on("close", (code) => finish(code));
   });
 }

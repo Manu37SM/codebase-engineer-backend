@@ -2271,4 +2271,36 @@ describe("projects API", () => {
       expect(res.statusCode).toBe(404);
     });
   });
+
+  describe("Pro-tier bulk actions (\"Fix all findings\" / \"Approve & generate all\") — added per explicit user request", () => {
+    it("findings/fix-all is refused with 403 when billing isn't configured (tier defaults to free, not pro)", async () => {
+      const { project } = await setUpFindingWithFixPlan();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/projects/${project.id}/findings/fix-all`,
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error).toMatch(/Pro-tier feature/);
+    });
+
+    it("patches/generate-all is refused with 403 when billing isn't configured (tier defaults to free, not pro)", async () => {
+      const { project } = await setUpFindingWithFixPlan();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/projects/${project.id}/patches/generate-all`,
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error).toMatch(/Pro-tier feature/);
+    });
+
+    it("findings/fix-all 404s for an unknown project", async () => {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/projects/00000000-0000-0000-0000-000000000000/findings/fix-all",
+      });
+      expect(res.statusCode).toBe(404);
+    });
+  });
 });

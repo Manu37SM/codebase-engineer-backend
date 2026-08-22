@@ -348,3 +348,75 @@ describe("runAnalysis — disabled-tls-verification rule", () => {
     expect(findings.find((f) => f.ruleId === "disabled-tls-verification")).toBeUndefined();
   });
 });
+
+describe("runAnalysis — missing-readme rule (documentation category)", () => {
+  let root: string;
+  afterEach(() => root && cleanupRepo(root));
+
+  it("flags a project with no top-level README", () => {
+    root = makeTempRepo();
+    writeFile(root, "src/index.ts", "export const x = 1;\n");
+
+    const { findings } = runAnalysis(root);
+    const finding = findings.find((f) => f.ruleId === "missing-readme");
+    expect(finding).toBeTruthy();
+    expect(finding!.category).toBe("documentation");
+  });
+
+  it("does not flag a project with a README.md at the root", () => {
+    root = makeTempRepo();
+    writeFile(root, "README.md", "# My Project\n");
+    writeFile(root, "src/index.ts", "export const x = 1;\n");
+
+    const { findings } = runAnalysis(root);
+    expect(findings.find((f) => f.ruleId === "missing-readme")).toBeUndefined();
+  });
+
+  it("does not count a README nested in a subdirectory as satisfying the rule", () => {
+    root = makeTempRepo();
+    writeFile(root, "docs/README.md", "# Not the root one\n");
+
+    const { findings } = runAnalysis(root);
+    expect(findings.find((f) => f.ruleId === "missing-readme")).toBeTruthy();
+  });
+});
+
+describe("runAnalysis — unpinned-dependency rule (dependencies category)", () => {
+  let root: string;
+  afterEach(() => root && cleanupRepo(root));
+
+  it("flags a dependency pinned to \"*\" or \"latest\"", () => {
+    root = makeTempRepo();
+    writeFile(
+      root,
+      "package.json",
+      JSON.stringify({ name: "app", dependencies: { lodash: "*", "left-pad": "latest", react: "^18.0.0" } })
+    );
+
+    const { findings } = runAnalysis(root);
+    const finding = findings.find((f) => f.ruleId === "unpinned-dependency");
+    expect(finding).toBeTruthy();
+    expect(finding!.category).toBe("dependencies");
+    expect(finding!.evidence).toContain("lodash@*");
+    expect(finding!.evidence).not.toContain("react");
+  });
+
+  it("does not flag properly pinned/ranged dependencies", () => {
+    root = makeTempRepo();
+    writeFile(
+      root,
+      "package.json",
+      JSON.stringify({ name: "app", dependencies: { react: "^18.0.0", lodash: "~4.17.21" } })
+    );
+
+    const { findings } = runAnalysis(root);
+    expect(findings.find((f) => f.ruleId === "unpinned-dependency")).toBeUndefined();
+  });
+
+  it("does not crash on a malformed package.json", () => {
+    root = makeTempRepo();
+    writeFile(root, "package.json", "{ not valid json");
+
+    expect(() => runAnalysis(root)).not.toThrow();
+  });
+});
