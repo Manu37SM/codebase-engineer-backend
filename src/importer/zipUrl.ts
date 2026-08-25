@@ -31,6 +31,64 @@ export class ZipDownloadError extends Error {}
 // letting it fail deep inside the zip parser.
 const GOOGLE_DRIVE_LINK_PATTERN = /^https?:\/\/(drive|docs)\.google\.com\//i;
 
+// User-report fix #2: a 1drv.ms/OneDrive share link (a different cloud
+// host than Drive, same underlying mistake) was outright rejected with a
+// bare "403 Forbidden" from Microsoft's edge before it even reached the
+// html-page detection below — Node's fetch sends no/minimal User-Agent by
+// default, and OneDrive's CDN (like many others) blocks that as basic bot
+// mitigation regardless of the link's actual sharing settings. Sending a
+// realistic browser User-Agent fixes that class of false-403 outright.
+const BROWSER_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+function isOneDriveHost(...urls: Array<string | undefined>): boolean {
+  return urls.some((u) => {
+    if (!u) return false;
+    let hostname: string;
+    try {
+      hostname = new URL(u).hostname.toLowerCase();
+    } catch {
+      return false;
+    }
+    return (
+      hostname === "1drv.ms" ||
+      hostname.endsWith(".1drv.ms") ||
+      hostname === "onedrive.live.com" ||
+      hostname.endsWith(".onedrive.live.com") ||
+      hostname.endsWith(".sharepoint.com")
+    );
+  });
+}
+
+/**
+ * OneDrive share links resolve to a web viewer by default, but support a
+ * documented `download=1` query parameter that serves the file's raw bytes
+ * instead — applied to the *resolved* URL (after 1drv.ms's own redirect),
+ * since the shortlink's own query string doesn't carry through a redirect
+ * to a different host.
+ */
+async function tryOneDriveDirectDownload(resolvedUrl: string): Promise<Response | null> {
+  let target: URL;
+  try {
+    target = new URL(resolvedUrl);
+  } catch {
+    return null;
+  }
+  if (target.searchParams.get("download") === "1") return null; // already tried this shape
+  target.searchParams.set("download", "1");
+  try {
+    const retryResponse = await fetch(target.toString(), {
+      headers: { "User-Agent": BROWSER_USER_AGENT, Accept: "*/*" },
+    });
+    if (retryResponse.ok && !(retryResponse.headers.get("content-type") ?? "").toLowerCase().includes("text/html")) {
+      return retryResponse;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * A "Zip download URL" must be a direct, publicly-reachable link to the
  * file's raw bytes — the same kind of link a plain `curl`/browser download
@@ -56,16 +114,31 @@ export async function downloadAndExtractZip(url: string, destDir: string): Promi
 
   let response: Response;
   try {
-    response = await fetch(url);
+    response = await fetch(url, { headers: { "User-Agent": BROWSER_USER_AGENT, Accept: "*/*" } });
   } catch (err) {
     throw new ZipDownloadError(`Could not reach ${url}: ${(err as Error).message}`);
   }
+
+  const initiallyBlocked =
+    !response.ok || (response.headers.get("content-type") ?? "").toLowerCase().includes("text/html");
+  if (initiallyBlocked && isOneDriveHost(trimmedUrl, response.url)) {
+    const retried = await tryOneDriveDirectDownload(response.url || trimmedUrl);
+    if (retried) response = retried;
+  }
+
+  const isOneDrive = isOneDriveHost(trimmedUrl, response.url);
+
   if (!response.ok) {
     if (response.status === 403) {
+      const oneDriveHint = isOneDrive
+        ? " For OneDrive links specifically: double-check the permission is set to \"Anyone with the link can " +
+          "view\" (editing access isn't required and can trigger extra checks), and copy a fresh link right " +
+          "before pasting it here — OneDrive links can expire."
+        : "";
       throw new ZipDownloadError(
         `The server refused this download (403 Forbidden). This usually means the link requires sign-in or ` +
           `isn't shared publicly yet — make sure it's set to "Anyone with the link can view/download" and that ` +
-          `it's a direct file link, not a page that requires clicking a download button.`
+          `it's a direct file link, not a page that requires clicking a download button.${oneDriveHint}`
       );
     }
     if (response.status === 404) {
@@ -88,10 +161,14 @@ export async function downloadAndExtractZip(url: string, destDir: string): Promi
   // error name the real problem instead of a cryptic zip-parsing failure.
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.toLowerCase().includes("text/html")) {
+    const oneDriveHint = isOneDrive
+      ? " Tried OneDrive's direct-download link shape automatically and it still returned a page — the file's " +
+        "sharing permission may not actually be public yet."
+      : "";
     throw new ZipDownloadError(
       `This URL returned a webpage instead of a zip file (content-type: ${contentType}). It's likely a share/` +
         `viewer page rather than a direct download link, or it requires signing in first — a direct zip link ` +
-        `should be downloadable with no browser interaction at all.`
+        `should be downloadable with no browser interaction at all.${oneDriveHint}`
     );
   }
 

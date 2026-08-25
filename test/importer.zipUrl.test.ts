@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -136,6 +136,84 @@ describe("downloadAndExtractZip", () => {
     server = await startZipServer(buildFlatZip());
     destDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ce-zip-test-")), "extracted");
     await expect(downloadAndExtractZip(`${server.url}/viewer-page`, destDir)).rejects.toThrow(/webpage/i);
+  });
+
+  // User report: a real 1drv.ms link came back as a bare 403 from
+  // Microsoft's edge — plausibly because Node's fetch sends no/minimal
+  // User-Agent by default and OneDrive's CDN blocks that as basic bot
+  // mitigation. These tests mock `fetch` directly (a real OneDrive host
+  // can't be pointed at the local test server) to lock in both the
+  // outgoing User-Agent and the automatic `download=1` retry.
+  describe("OneDrive links", () => {
+    const originalFetch = global.fetch;
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    it("sends a realistic browser User-Agent on every request", async () => {
+      destDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ce-zip-test-")), "extracted");
+      const zipBuffer = buildFlatZip();
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        url: "https://example.com/archive.zip",
+        headers: new Headers({ "content-type": "application/zip", "content-length": String(zipBuffer.length) }),
+        arrayBuffer: async () => zipBuffer.buffer.slice(zipBuffer.byteOffset, zipBuffer.byteOffset + zipBuffer.byteLength),
+      }));
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      await downloadAndExtractZip("https://example.com/archive.zip", destDir);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const options = fetchMock.mock.calls[0][1] as { headers: Record<string, string> };
+      expect(options.headers["User-Agent"]).toMatch(/Mozilla/);
+    });
+
+    it("automatically retries a blocked 1drv.ms link with the download=1 shape and succeeds", async () => {
+      destDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ce-zip-test-")), "extracted");
+      const zipBuffer = buildFlatZip();
+      const resolvedUrl = "https://onedrive.live.com/redir?resid=ABC123&authkey=xyz";
+      let call = 0;
+      global.fetch = vi.fn(async (input: unknown) => {
+        call++;
+        const requestUrl = typeof input === "string" ? input : (input as URL).toString();
+        if (call === 1) {
+          // Initial request to the shortlink comes back blocked (403).
+          return {
+            ok: false,
+            status: 403,
+            url: resolvedUrl,
+            headers: new Headers(),
+          };
+        }
+        // Retry should target the resolved URL with download=1 appended.
+        expect(requestUrl).toBe(`${resolvedUrl}&download=1`);
+        return {
+          ok: true,
+          status: 200,
+          url: requestUrl,
+          headers: new Headers({ "content-type": "application/zip", "content-length": String(zipBuffer.length) }),
+          arrayBuffer: async () => zipBuffer.buffer.slice(zipBuffer.byteOffset, zipBuffer.byteOffset + zipBuffer.byteLength),
+        };
+      }) as unknown as typeof fetch;
+
+      await downloadAndExtractZip("https://1drv.ms/u/s!ABC123", destDir);
+
+      expect(fs.existsSync(path.join(destDir, "README.md"))).toBe(true);
+    });
+
+    it("gives a OneDrive-specific hint when the automatic retry also fails", async () => {
+      destDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ce-zip-test-")), "extracted");
+      global.fetch = vi.fn(async () => ({
+        ok: false,
+        status: 403,
+        url: "https://onedrive.live.com/redir?resid=ABC123",
+        headers: new Headers(),
+      })) as unknown as typeof fetch;
+
+      await expect(downloadAndExtractZip("https://1drv.ms/u/s!ABC123", destDir)).rejects.toThrow(/OneDrive/i);
+    });
   });
 });
 
