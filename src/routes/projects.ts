@@ -32,7 +32,7 @@ import {
 } from "../db/findingRepo.js";
 import { analyzeGit } from "../git/index.js";
 import { runTests } from "../testrunner/run.js";
-import { saveTestRun, getTestRun, listTestRuns } from "../db/testRunRepo.js";
+import { saveTestRun, getTestRun, listTestRuns, deleteTestRun, deleteAllTestRuns } from "../db/testRunRepo.js";
 import { scanSecurity } from "../security/scan.js";
 import { analyzeDependencies } from "../dependencies/index.js";
 import { buildAuditReport, buildAuditMarkdown } from "../audit/index.js";
@@ -1295,6 +1295,16 @@ export function registerProjectsRoutes(
     return reply.status(200).send({ patch: getPatchById(db, patchId) });
   });
 
+  /**
+   * Also accepts 'approved_for_apply', not just 'proposed' — a real gap the
+   * user hit: once a diff passed the second approval gate, there was no way
+   * back except actually applying it. A reviewer can legitimately change
+   * their mind after approving-for-apply but before the real disk write
+   * (e.g. they re-read the diff, or new commits landed on the file since)
+   * — this route is the only thing standing between that decision and an
+   * unwanted `git apply`, so it needs to stay reachable right up until
+   * /apply actually runs, not just from one specific prior status.
+   */
   app.post("/api/v1/projects/:id/patches/:patchId/reject-apply", async (request, reply) => {
     const { id, patchId } = request.params as { id: string; patchId: string };
     const project = getProjectById(db, id);
@@ -1304,8 +1314,10 @@ export function registerProjectsRoutes(
     if (!patch || patch.project_id !== id) {
       return reply.status(404).send({ error: "Patch not found" });
     }
-    if (patch.status !== "proposed") {
-      return reply.status(400).send({ error: `Patch is "${patch.status}", not "proposed" — cannot reject.` });
+    if (patch.status !== "proposed" && patch.status !== "approved_for_apply") {
+      return reply
+        .status(400)
+        .send({ error: `Patch is "${patch.status}", not "proposed" or "approved_for_apply" — cannot reject.` });
     }
 
     const body = request.body as { reviewerNote?: string } | undefined;
@@ -1317,6 +1329,50 @@ export function registerProjectsRoutes(
     updatePatchStatus(db, patchId, "rejected");
 
     return reply.status(200).send({ patch: getPatchById(db, patchId) });
+  });
+
+  /**
+   * Pro-tier bulk counterpart to /reject-apply: rejects every patch on this
+   * project that's still awaiting a human decision past the diff-review
+   * gate ('proposed' or 'approved_for_apply'), in one call. Unlike
+   * fix-all/generate-all this never calls an AI provider — it's a pure DB
+   * state change — so there's no usage/token total to report, and it's
+   * gated on Pro tier purely because bulk-rejecting a whole queue at once
+   * is a power-user action, same reasoning as the other "…all" buttons.
+   */
+  app.post("/api/v1/projects/:id/patches/reject-all", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const usageCheck = checkAiOperationAllowed(db);
+    if (usageCheck.tier !== "pro") {
+      return reply
+        .status(403)
+        .send({ error: "Rejecting all patches at once is a Pro-tier feature. Upgrade to Pro in Settings to use it." });
+    }
+
+    const body = request.body as { reviewerNote?: string } | undefined;
+    const targeted = listPatchesForProject(db, id).filter(
+      (p) => p.status === "proposed" || p.status === "approved_for_apply"
+    );
+
+    for (const patch of targeted) {
+      createPatchReview(db, randomUUID(), {
+        patchId: patch.id,
+        decision: "rejected_after_review",
+        reviewerNote: body?.reviewerNote ?? "Rejected in bulk via \"Reject all\" (Pro).",
+      });
+      updatePatchStatus(db, patch.id, "rejected");
+    }
+
+    return reply.status(200).send({
+      attempted: targeted.length,
+      succeeded: targeted.length,
+      failed: 0,
+      skipped: 0,
+      results: targeted.map((p) => ({ patchId: p.id, error: null })),
+    });
   });
 
   /**
@@ -1876,6 +1932,38 @@ export function registerProjectsRoutes(
       return reply.status(404).send({ error: "Test run not found" });
     }
     return reply.status(200).send({ run });
+  });
+
+  /** Deletes one entry from the Tests page's run history. Only the recorded run is removed — the real test suite on disk is never touched, and this never re-runs anything. */
+  app.delete("/api/v1/projects/:id/tests/:runId", async (request, reply) => {
+    const { id, runId } = request.params as { id: string; runId: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const run = getTestRun(db, runId);
+    if (!run || run.project_id !== id) {
+      return reply.status(404).send({ error: "Test run not found" });
+    }
+
+    deleteTestRun(db, runId);
+    return reply.status(200).send({ deleted: true });
+  });
+
+  /** Pro-tier only: clears the entire run history for a project in one call, per the user's explicit request ("delete tests and delete all (PRO only)"). */
+  app.delete("/api/v1/projects/:id/tests", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = getProjectById(db, id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    const usageCheck = checkAiOperationAllowed(db);
+    if (usageCheck.tier !== "pro") {
+      return reply
+        .status(403)
+        .send({ error: "Deleting all test run history at once is a Pro-tier feature. Upgrade to Pro in Settings to use it." });
+    }
+
+    const deleted = deleteAllTestRuns(db, id);
+    return reply.status(200).send({ deleted });
   });
 
   /**

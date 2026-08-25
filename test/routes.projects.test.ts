@@ -601,6 +601,72 @@ describe("projects API", () => {
     expect(listRes.json().runs).toHaveLength(1);
   });
 
+  it("deletes one run from the history — the recorded run only, never the real test suite on disk", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      payload: { name: "test-delete-one-fixture", rootPath: repoRoot },
+    });
+    const { project } = createRes.json();
+
+    const runRes = await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/tests/run` });
+    const runId = runRes.json().run.id;
+
+    const deleteRes = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/projects/${project.id}/tests/${runId}`,
+    });
+    expect(deleteRes.statusCode).toBe(200);
+    expect(deleteRes.json().deleted).toBe(true);
+
+    const getRes = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/tests/${runId}` });
+    expect(getRes.statusCode).toBe(404);
+
+    const listRes = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/tests` });
+    expect(listRes.json().runs).toHaveLength(0);
+  });
+
+  it("404s deleting an unknown test run", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      payload: { name: "test-delete-404-fixture", rootPath: repoRoot },
+    });
+    const { project } = createRes.json();
+
+    const res = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/projects/${project.id}/tests/00000000-0000-0000-0000-000000000000`,
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("tests/DELETE (delete-all) is refused with 403 when billing isn't configured (tier defaults to free, not pro)", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      payload: { name: "test-delete-all-free-fixture", rootPath: repoRoot },
+    });
+    const { project } = createRes.json();
+    await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/tests/run` });
+
+    const res = await app.inject({ method: "DELETE", url: `/api/v1/projects/${project.id}/tests` });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toMatch(/Pro-tier feature/);
+
+    // Refused, so the run must still be there.
+    const listRes = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/tests` });
+    expect(listRes.json().runs).toHaveLength(1);
+  });
+
+  it("tests/DELETE (delete-all) 404s for an unknown project", async () => {
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/projects/00000000-0000-0000-0000-000000000000/tests",
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
   it("reports supported:false and persists a reason for an unsupported project", async () => {
     // repoRoot's default package.json (from beforeEach) has no test script.
     const createRes = await app.inject({
@@ -1657,6 +1723,48 @@ describe("projects API", () => {
     expect(fileContent).toContain("sk_live_ABCDEFGHIJKLMNOPQRSTUV");
   });
 
+  it("also allows rejecting a diff after it's already been approved-for-apply — a real gap the user hit: no way back once past the second gate", async () => {
+    const { project, finding } = await setUpFindingWithFixPlan();
+
+    const createRes = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${project.id}/findings/${finding.id}/patches`,
+    });
+    const patch = createRes.json().patch;
+
+    const { url: genUrl, close: closeGen } = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ model: "gpt-test", choices: [{ message: { content: PATCH_DIFF }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }));
+    });
+    const providerRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/ai/providers",
+      payload: { name: "Reject After Approve-Apply Provider", kind: "openai-compatible", baseUrl: genUrl, model: "gpt-test" },
+    });
+    await app.inject({ method: "PATCH", url: `/api/v1/ai/providers/${providerRes.json().provider.id}`, payload: { enabled: true } });
+    await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/patches/${patch.id}/approve` });
+    await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/patches/${patch.id}/generate` });
+    await closeGen();
+
+    const approveApplyRes = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${project.id}/patches/${patch.id}/approve-apply`,
+    });
+    expect(approveApplyRes.json().patch.status).toBe("approved_for_apply");
+
+    const rejectApplyRes = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${project.id}/patches/${patch.id}/reject-apply`,
+      payload: { reviewerNote: "Changed my mind before applying" },
+    });
+    expect(rejectApplyRes.statusCode).toBe(200);
+    expect(rejectApplyRes.json().patch.status).toBe("rejected");
+
+    // Still nothing written — rejecting from approved_for_apply never touches the file.
+    const fileContent = fs.readFileSync(path.join(repoRoot, "src/config.ts"), "utf-8");
+    expect(fileContent).toContain("sk_live_ABCDEFGHIJKLMNOPQRSTUV");
+  });
+
   it("records a failed apply (diff no longer matches the working tree) without touching the file, and allows a retry", async () => {
     const { project, finding } = await setUpFindingWithFixPlan();
 
@@ -2299,6 +2407,25 @@ describe("projects API", () => {
       const res = await app.inject({
         method: "POST",
         url: "/api/v1/projects/00000000-0000-0000-0000-000000000000/findings/fix-all",
+      });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it("patches/reject-all is refused with 403 when billing isn't configured (tier defaults to free, not pro)", async () => {
+      const { project } = await setUpFindingWithFixPlan();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/projects/${project.id}/patches/reject-all`,
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error).toMatch(/Pro-tier feature/);
+    });
+
+    it("patches/reject-all 404s for an unknown project", async () => {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/projects/00000000-0000-0000-0000-000000000000/patches/reject-all",
       });
       expect(res.statusCode).toBe(404);
     });

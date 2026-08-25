@@ -73,3 +73,14 @@ export function listTestRuns(db: DB, projectId: string, limit = 20): TestRunReco
     )
     .all(projectId, limit) as TestRunRecord[];
 }
+
+/** Deletes one run from the history. Only ever deletes the run row itself — the real test suite on disk is never touched. */
+export function deleteTestRun(db: DB, id: string): void {
+  db.prepare("DELETE FROM test_run WHERE id = ?").run(id);
+}
+
+/** Pro-tier "Delete all" on the Tests page's run history — clears every recorded run for a project. Returns how many rows were removed. */
+export function deleteAllTestRuns(db: DB, projectId: string): number {
+  const result = db.prepare("DELETE FROM test_run WHERE project_id = ?").run(projectId);
+  return result.changes;
+}
