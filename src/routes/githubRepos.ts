@@ -18,6 +18,13 @@ interface RegisterGitHubRepoRoutesOptions {
 const REPOS_URL = "https://api.github.com/user/repos";
 const USER_AGENT = "codebase-engineer";
 const MAX_PAGES = 5; // 5 * 100 = up to 500 repos, generous without being unbounded.
+// Bug fix: the outbound call to GitHub's API had no timeout at all — on a
+// stuck/slow connection (e.g. an egress network issue on the host) the
+// fetch would hang indefinitely, leaving the frontend's "Loading your
+// repositories…" spinning forever with no error ever surfacing. Bounding
+// it means a genuinely stuck request now fails loudly (502) within a
+// fixed window instead of hanging the request forever.
+const FETCH_TIMEOUT_MS = 15_000;
 
 interface GitHubApiRepo {
   id: number;
@@ -107,6 +114,7 @@ export function registerGitHubRepoRoutes(app: FastifyInstance, { db, dataDir }: 
             "User-Agent": USER_AGENT,
             Accept: "application/vnd.github+json",
           },
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         });
         if (!res.ok) {
           return reply.status(502).send({ error: `GitHub rejected the repository list request (status ${res.status}).` });
