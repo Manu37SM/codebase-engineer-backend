@@ -80,7 +80,20 @@ export async function listDriveZipFiles(accessToken: string): Promise<{ files: D
 
   do {
     const url = new URL(DRIVE_FILES_URL);
-    url.searchParams.set("q", "mimeType='application/zip' and trashed=false");
+    // Bug fix (user report): a zip made via Windows' "Compress to ZIP"
+    // (or several other zip tools) often gets stored in Drive tagged with
+    // a mimeType other than the canonical 'application/zip' — e.g.
+    // 'application/x-zip-compressed' — so filtering on that one exact
+    // mimeType silently hid otherwise-perfectly-valid zip files from this
+    // list. `fileExtension='zip'` matches by the file's actual extension
+    // regardless of what mimeType Drive guessed, which is what users
+    // actually mean by "my zip files"; the mimeType clause is kept as a
+    // fallback for the rare zip uploaded without a .zip extension.
+    url.searchParams.set(
+      "q",
+      "(fileExtension='zip' or mimeType='application/zip' or mimeType='application/x-zip-compressed' " +
+        "or mimeType='application/x-zip') and trashed=false"
+    );
     url.searchParams.set("fields", "nextPageToken, files(id, name, mimeType, modifiedTime, size)");
     url.searchParams.set("pageSize", "100");
     url.searchParams.set("spaces", "drive");

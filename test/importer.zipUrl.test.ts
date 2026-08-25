@@ -18,6 +18,14 @@ function startZipServer(zipBuffer: Buffer): Promise<{ url: string; close: () => 
         res.writeHead(200, { "content-type": "text/plain" }).end("this is not a zip file");
         return;
       }
+      if (req.url === "/forbidden") {
+        res.writeHead(403).end("forbidden");
+        return;
+      }
+      if (req.url === "/viewer-page") {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end("<html>sign in to view</html>");
+        return;
+      }
       res.writeHead(200, { "content-type": "application/zip", "content-length": String(zipBuffer.length) });
       res.end(zipBuffer);
     });
@@ -103,6 +111,31 @@ describe("downloadAndExtractZip", () => {
     server = await startZipServer(buildFlatZip());
     destDir = fs.mkdtempSync(path.join(os.tmpdir(), "ce-zip-test-existing-"));
     await expect(downloadAndExtractZip(server.url, destDir)).rejects.toThrow(/already exists/);
+  });
+
+  // User report: pasting a Google Drive "share" link (which serves an HTML
+  // viewer page, not the file's raw bytes) into the plain "Zip download
+  // URL" field always failed with an opaque AdmZip parsing error. Caught
+  // up front now with an actionable message instead.
+  it("gives a friendly, actionable error for a Google Drive share link instead of a raw zip-parse failure", async () => {
+    destDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ce-zip-test-")), "extracted");
+    await expect(
+      downloadAndExtractZip("https://drive.google.com/file/d/abc123/view?usp=sharing", destDir)
+    ).rejects.toThrow(/Google Drive/i);
+  });
+
+  it("gives a friendly 403 message instead of a bare status code", async () => {
+    server = await startZipServer(buildFlatZip());
+    destDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ce-zip-test-")), "extracted");
+    await expect(downloadAndExtractZip(`${server.url}/forbidden`, destDir)).rejects.toThrow(
+      /shared publicly|Forbidden/i
+    );
+  });
+
+  it("gives a friendly message when the URL serves an HTML page instead of a zip", async () => {
+    server = await startZipServer(buildFlatZip());
+    destDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ce-zip-test-")), "extracted");
+    await expect(downloadAndExtractZip(`${server.url}/viewer-page`, destDir)).rejects.toThrow(/webpage/i);
   });
 });
 

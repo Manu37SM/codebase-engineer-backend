@@ -22,9 +22,33 @@ export class ZipDownloadError extends Error {}
  * `destDir` itself is the actual project root rather than a wrapper
  * directory containing it.
  */
+// User-report fix: pasting a Google Drive "share" link
+// (drive.google.com/file/d/<id>/view) here downloads Drive's HTML viewer
+// page, not the zip's bytes — the resulting "archive" is actually a
+// webpage, which AdmZip then fails to open with an opaque "No END header
+// found" error that gives the user no idea what went wrong. Catch this
+// specific, common mistake up front with an actionable message rather than
+// letting it fail deep inside the zip parser.
+const GOOGLE_DRIVE_LINK_PATTERN = /^https?:\/\/(drive|docs)\.google\.com\//i;
+
+/**
+ * A "Zip download URL" must be a direct, publicly-reachable link to the
+ * file's raw bytes — the same kind of link a plain `curl`/browser download
+ * would work with, no sign-in required. Share pages from Drive, Dropbox,
+ * OneDrive, etc. serve an HTML viewer at that URL instead, which is why
+ * this check exists as its own step.
+ */
 export async function downloadAndExtractZip(url: string, destDir: string): Promise<void> {
-  if (!/^https?:\/\//i.test(url.trim())) {
+  const trimmedUrl = url.trim();
+  if (!/^https?:\/\//i.test(trimmedUrl)) {
     throw new ZipDownloadError(`Not a valid http(s) URL: ${url}`);
+  }
+  if (GOOGLE_DRIVE_LINK_PATTERN.test(trimmedUrl)) {
+    throw new ZipDownloadError(
+      "This looks like a Google Drive link, not a direct download link — Drive share links open a viewer " +
+        "page rather than serving the file's raw bytes, so this always fails. Use the \"Google Drive\" tab " +
+        "instead to browse and import a zip file straight from your Drive."
+    );
   }
   if (fs.existsSync(destDir)) {
     throw new Error(`Destination already exists: ${destDir}`);
@@ -37,6 +61,16 @@ export async function downloadAndExtractZip(url: string, destDir: string): Promi
     throw new ZipDownloadError(`Could not reach ${url}: ${(err as Error).message}`);
   }
   if (!response.ok) {
+    if (response.status === 403) {
+      throw new ZipDownloadError(
+        `The server refused this download (403 Forbidden). This usually means the link requires sign-in or ` +
+          `isn't shared publicly yet — make sure it's set to "Anyone with the link can view/download" and that ` +
+          `it's a direct file link, not a page that requires clicking a download button.`
+      );
+    }
+    if (response.status === 404) {
+      throw new ZipDownloadError(`The server couldn't find this file (404 Not Found). Double-check the URL: ${url}`);
+    }
     throw new ZipDownloadError(`Download failed with status ${response.status}: ${url}`);
   }
 
@@ -47,6 +81,20 @@ export async function downloadAndExtractZip(url: string, destDir: string): Promi
     );
   }
 
+  // Another common shape of the same underlying mistake: the URL "works"
+  // (200 OK) but what's actually served is an HTML page — a login wall, a
+  // "click here to download" landing page, etc. — rather than the zip
+  // itself. Catching it here, before handing the bytes to AdmZip, lets the
+  // error name the real problem instead of a cryptic zip-parsing failure.
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.toLowerCase().includes("text/html")) {
+    throw new ZipDownloadError(
+      `This URL returned a webpage instead of a zip file (content-type: ${contentType}). It's likely a share/` +
+        `viewer page rather than a direct download link, or it requires signing in first — a direct zip link ` +
+        `should be downloadable with no browser interaction at all.`
+    );
+  }
+
   const buffer = Buffer.from(await response.arrayBuffer());
   if (buffer.byteLength > MAX_DOWNLOAD_BYTES) {
     throw new ZipDownloadError(
@@ -54,7 +102,7 @@ export async function downloadAndExtractZip(url: string, destDir: string): Promi
     );
   }
 
-  extractZipBuffer(buffer, destDir);
+  extractZipBuffer(buffer, destDir, { friendlyInvalidZipHint: true });
 }
 
 /**
@@ -67,7 +115,11 @@ export async function downloadAndExtractZip(url: string, destDir: string): Promi
  * do) can reuse the exact same extraction/flattening behavior rather than
  * duplicating it.
  */
-export function extractZipBuffer(buffer: Buffer, destDir: string): void {
+export function extractZipBuffer(
+  buffer: Buffer,
+  destDir: string,
+  options?: { friendlyInvalidZipHint?: boolean }
+): void {
   if (fs.existsSync(destDir)) {
     throw new Error(`Destination already exists: ${destDir}`);
   }
@@ -80,7 +132,19 @@ export function extractZipBuffer(buffer: Buffer, destDir: string): void {
     try {
       zip = new AdmZip(tmpZipPath);
     } catch (err) {
-      throw new ZipDownloadError(`Not a valid zip archive: ${(err as Error).message}`);
+      // options.friendlyInvalidZipHint is set only by downloadAndExtractZip
+      // (the plain "Zip download URL" path), where an invalid archive most
+      // often means the URL didn't actually point at a zip's raw bytes —
+      // the Google Drive Reconnect page report that led here. The Drive
+      // browse-and-import path (importDriveZipFile) downloads bytes
+      // Google itself already confirmed as a zip file, so this specific
+      // hint doesn't apply there.
+      const hint = options?.friendlyInvalidZipHint
+        ? " This usually means the URL isn't a direct link to a zip file's raw bytes — double-check it opens " +
+          "a direct file download (not a webpage or a \"click to download\" landing page) when pasted into a " +
+          "new browser tab with no sign-in."
+        : "";
+      throw new ZipDownloadError(`Not a valid zip archive: ${(err as Error).message}.${hint}`);
     }
 
     fs.mkdirSync(destDir, { recursive: true });
