@@ -13,18 +13,6 @@ import {
 } from "../src/testrunner/parse.js";
 import { makeTempRepo, writeFile, cleanupRepo } from "./fixtures.js";
 
-/**
- * Whether a real, invocable `cmd` exists on this machine's PATH — used to
- * skip (not fail) the "actually runs <toolchain>" real-process-execution
- * tests when that toolchain genuinely isn't installed here. The detection
- * logic these tests exercise (`detectTestCommand`) only looks at project
- * marker files, not at whether the binary is actually present — real CI
- * environments and contributors' machines legitimately won't all have
- * every one of Maven/Go/.NET/RSpec/pytest installed, and this project's
- * own "never fabricate a result" convention extends to its own test
- * suite: a missing toolchain should skip with a clear reason, not report
- * a confusing false failure.
- */
 function commandExists(cmd: string, versionArgs: string[] = ["--version"]): boolean {
   const result = spawn.sync(cmd, versionArgs, { stdio: "ignore" });
   return !result.error && result.status !== null;
@@ -225,9 +213,7 @@ describe("parseVitestOutput", () => {
   });
 
   it("parses a real ANSI-colored Vitest summary line (regression — see run.ts dogfooding note)", () => {
-    // Captured shape from a real `npm test` run: the "Tests" label itself is
-    // wrapped in a dim escape code, which broke a line-start-anchored regex
-    // that didn't strip ANSI codes first.
+
     const output =
       "[2m Test Files [22m [1m[32m10 passed[39m[22m[90m (10)[39m\n" +
       "[2m      Tests [22m [1m[32m77 passed[39m[22m[90m (77)[39m\n";
@@ -253,7 +239,7 @@ describe("parseMavenOutput", () => {
     const output =
       "Tests run: 5, Failures: 0, Errors: 0, Skipped: 0\n" +
       "Tests run: 7, Failures: 1, Errors: 1, Skipped: 1\n";
-    // module 1: 5 passed; module 2: 7 run, 1 failure + 1 error = 2 failed, 1 skipped, 4 passed
+
     expect(parseMavenOutput(output)).toEqual({ passed: 9, failed: 2, skipped: 1 });
   });
 
@@ -268,8 +254,7 @@ describe("parseMavenOutput", () => {
 
 describe("parseNodeTestOutput", () => {
   it("parses a real `node --test` TAP summary block (captured from a real run)", () => {
-    // Captured verbatim from a real `node --test` invocation against a
-    // 3-test file (2 passing, 1 failing) — not hand-written from memory.
+
     const output = [
       "1..3",
       "# tests 3",
@@ -415,17 +400,10 @@ describe("runTests — real process execution", () => {
     expect(outcome.framework).toBe("npm-script");
     expect(outcome.exitCode).toBe(0);
     expect(outcome.stdout).toContain("hello from test");
-    // Framework is generic npm-script — counts are honestly unknown, not fabricated.
+
     expect(outcome.passed).toBeNull();
     },
-    // All of these spawn `npm test` for real — on Windows that goes
-    // through an extra .cmd/cmd.exe wrapper layer (see run.ts's Windows
-    // notes) whose startup cost, especially under load, can exceed
-    // Vitest's 5s default even though nothing is actually hung. A real
-    // pasted Windows run (2026-08-20) hit this on the node --test
-    // variant specifically; the same generous timeout is applied to its
-    // siblings here so this doesn't just reappear on a slightly slower
-    // machine or a busier CI run.
+
     20_000
   );
 
@@ -453,7 +431,7 @@ describe("runTests — real process execution", () => {
     const outcome = await runTests(root);
     expect(outcome.supported).toBe(true);
     expect(outcome.framework).toBe("node-test");
-    expect(outcome.exitCode).not.toBe(0); // one real failing test
+    expect(outcome.exitCode).not.toBe(0); 
     expect(outcome.passed).toBe(2);
     expect(outcome.failed).toBe(1);
     expect(outcome.skipped).toBe(0);
@@ -495,12 +473,7 @@ describe("runTests — real process execution", () => {
     expect(outcome.failed).toBe(1);
     expect(outcome.skipped).toBe(0);
     },
-    // pytest's interpreter/import startup can legitimately take longer
-    // than Vitest's 5s default on some machines (observed on a real
-    // Windows run) — this is a real subprocess doing real work, not a
-    // hang, so it gets the same generous per-test timeout as the other
-    // "actually runs <toolchain>" tests below rather than a fabricated
-    // pass from a lucky-fast machine.
+
     20_000
   );
 

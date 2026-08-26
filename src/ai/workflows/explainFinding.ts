@@ -13,7 +13,7 @@ export interface ExplainFindingOptions {
   projectRoot: string;
   finding: FindingRecord;
   files: FileForSelection[];
-  /** The row from `provider_configuration` to use — the caller (the route) is responsible for picking an enabled one. */
+
   providerConfig: ProviderConfig & { id: string; name: string };
   budgetTokens?: number;
 }
@@ -27,20 +27,6 @@ export interface ExplainFindingResult {
   usage: AICompletionResult["usage"];
 }
 
-/**
- * The first real AI-Mode workflow (Phase 14): builds a Phase 13 context
- * bundle for a finding, sends it to the configured provider asking for a
- * plain-language explanation (why it matters, likely cause), and persists
- * an accounting record of the call per docs/AI_MODE.md §7 via the shared
- * `runFindingWorkflow` runner (factored out in Phase 15 once
- * `analyzeRootCause` needed the exact same request/response bookkeeping).
- *
- * This is read-only: it never writes to the finding, never applies
- * anything, and carries no side effect beyond the accounting rows and
- * whatever tokens the provider actually bills. Root-cause analysis, fix
- * planning, and patch generation are separate, later workflows —
- * deliberately not folded into this one.
- */
 export async function explainFinding(options: ExplainFindingOptions): Promise<ExplainFindingResult> {
   const result = await runFindingWorkflow({
     ...options,

@@ -11,19 +11,14 @@ import { buildGitHubCloneUrl, cloneWithToken, InvalidRepoFullNameError } from ".
 
 interface RegisterGitHubRepoRoutesOptions {
   db: DB;
-  /** Same data directory git/zip imports use (Task #85) — see BuildAppOptions.dataDir in app.ts. */
+
   dataDir: string;
 }
 
 const REPOS_URL = "https://api.github.com/user/repos";
 const USER_AGENT = "codebase-engineer";
-const MAX_PAGES = 5; // 5 * 100 = up to 500 repos, generous without being unbounded.
-// Bug fix: the outbound call to GitHub's API had no timeout at all — on a
-// stuck/slow connection (e.g. an egress network issue on the host) the
-// fetch would hang indefinitely, leaving the frontend's "Loading your
-// repositories…" spinning forever with no error ever surfacing. Bounding
-// it means a genuinely stuck request now fails loudly (502) within a
-// fixed window instead of hanging the request forever.
+const MAX_PAGES = 5; 
+
 const FETCH_TIMEOUT_MS = 15_000;
 
 interface GitHubApiRepo {
@@ -52,7 +47,7 @@ export interface GitHubRepoSummary {
 
 function nextLinkFromHeader(linkHeader: string | null): string | null {
   if (!linkHeader) return null;
-  // Standard GitHub pagination header: `<url>; rel="next", <url>; rel="last"`.
+
   for (const part of linkHeader.split(",")) {
     const match = part.match(/<([^>]+)>;\s*rel="next"/);
     if (match) return match[1];
@@ -60,21 +55,6 @@ function nextLinkFromHeader(linkHeader: string | null): string | null {
   return null;
 }
 
-/**
- * GitHub repo browser + clone-to-register (Task #84) — uses the encrypted
- * access token stored when the user signed in with GitHub (Task #83) to
- * list their repos, then clones a chosen one onto this same machine and
- * registers it exactly like any other imported project (Task #85's
- * `/projects/import`, reused indirectly via `createProject`). Still
- * local-first: the only thing that ever leaves this machine is the
- * outbound call to GitHub's own API/git-over-https using the user's own
- * token — no third-party server, no per-user server-side storage.
- *
- * Both routes require a signed-in user (they run behind `authGuard`,
- * since neither path is in its public-path allowlist) — GitHub OAuth
- * sign-in always creates a real account, so by the time a token exists to
- * browse with, auth is already required for this instance anyway.
- */
 export function registerGitHubRepoRoutes(app: FastifyInstance, { db, dataDir }: RegisterGitHubRepoRoutesOptions): void {
   function requireGitHubToken(userId: string): { token: string } | { error: { status: number; message: string } } {
     const identity = getOauthIdentityForUser(db, userId, "github");
@@ -189,7 +169,7 @@ export function registerGitHubRepoRoutes(app: FastifyInstance, { db, dataDir }: 
     }
 
     const name = body.name?.trim() || body.fullName.split("/")[1] || body.fullName;
-    const project = createProject(db, randomUUID(), name, destDir);
+    const project = createProject(db, randomUUID(), name, destDir, request.user?.id ?? null);
     return reply.status(201).send({ project });
   });
 }

@@ -28,7 +28,7 @@ describe("discoverRepository — JS/TS npm project", () => {
     writeFile(root, "src/index.ts", "export const x = 1;\nconsole.log(x);\n");
     writeFile(root, "src/App.tsx", "export function App() { return null; }\n");
     writeFile(root, "src/legacy.js", "module.exports = {};\n");
-    // Should be excluded from language counts and LOC entirely.
+
     writeFile(root, "node_modules/some-dep/index.js", "// vendored, must be ignored\n".repeat(500));
 
     const result = discoverRepository(root);
@@ -40,8 +40,8 @@ describe("discoverRepository — JS/TS npm project", () => {
 
     const ts = result.languages.find((l) => l.language === "TypeScript");
     const js = result.languages.find((l) => l.language === "JavaScript");
-    expect(ts?.fileCount).toBe(2); // index.ts + App.tsx
-    expect(js?.fileCount).toBe(1); // legacy.js only — node_modules excluded
+    expect(ts?.fileCount).toBe(2); 
+    expect(js?.fileCount).toBe(1); 
     expect(ts!.approxLoc).toBeGreaterThan(0);
 
     expect(result.isGitRepository).toBe(false);
@@ -92,7 +92,7 @@ describe("discoverRepository — Maven/Java project", () => {
     expect(result.frameworks).toContain("Spring Boot");
 
     const java = result.languages.find((l) => l.language === "Java");
-    expect(java?.fileCount).toBe(1); // target/ excluded
+    expect(java?.fileCount).toBe(1); 
   });
 });
 

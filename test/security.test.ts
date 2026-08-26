@@ -10,7 +10,7 @@ describe("scanSecurity", () => {
     root = makeTempRepo();
     writeFile(root, ".env", "SECRET=abc\n");
     writeFile(root, "src/app.ts", `app.use(cors({ origin: true }));\n`);
-    // Non-security issue — should never show up here.
+
     const bigContent = Array.from({ length: 500 }, (_, i) => `const line${i} = ${i};`).join("\n");
     writeFile(root, "src/big.ts", bigContent);
 

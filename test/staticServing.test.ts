@@ -5,15 +5,6 @@ import path from "node:path";
 import { openDatabase } from "../src/db/index.js";
 import { buildApp } from "../src/app.js";
 
-/**
- * Phase 24 packaging: `buildApp({ staticDir })` optionally serves a built
- * frontend alongside the API on the same port. These tests build a real
- * (tiny, fixture) "frontend build" on disk — real files, real
- * `app.inject()` HTTP requests through the real Fastify + @fastify/static
- * pipeline — rather than mocking the static plugin, since path-traversal
- * and SPA-fallback-vs-API-404 behavior are exactly the kind of thing that
- * looks right in a mock and is wrong for real.
- */
 describe("static frontend serving (Phase 24 packaging)", () => {
   let tmpDbPath: string;
   let staticDir: string;
@@ -43,10 +34,6 @@ describe("static frontend serving (Phase 24 packaging)", () => {
   it("without a staticDir, behaves exactly as API-only (no regression for the normal test/dev setup)", async () => {
     const { db, app } = makeApp(false);
 
-    // Unchanged from the app's normal (pre-Phase-24) behavior: no custom
-    // 404 handler is registered at all when staticDir is absent, so this
-    // is Fastify's own default 404 shape, not this feature's SPA-vs-API
-    // JSON 404 (see the staticDir=true tests below for that).
     const root = await app.inject({ method: "GET", url: "/" });
     expect(root.statusCode).toBe(404);
 
@@ -83,8 +70,6 @@ describe("static frontend serving (Phase 24 packaging)", () => {
   it("falls back to index.html for an unmatched client-side route (SPA routing)", async () => {
     const { db, app } = makeApp(true);
 
-    // e.g. a direct load/refresh of /findings, which only exists as a
-    // client-side React Router route, not a real file or API endpoint.
     const response = await app.inject({ method: "GET", url: "/findings" });
     expect(response.statusCode).toBe(200);
     expect(response.body).toContain("codebase-engineer-ui");
@@ -130,9 +115,6 @@ describe("static frontend serving (Phase 24 packaging)", () => {
   it("refuses a real path-traversal attempt against the static root", async () => {
     const { db, app } = makeApp(true);
 
-    // A file that genuinely exists just outside staticDir (its parent) —
-    // if @fastify/static's traversal protection had a hole, this exact
-    // request would leak it.
     const secretPath = path.join(path.dirname(staticDir), "outside-secret.txt");
     fs.writeFileSync(secretPath, "should never be servable");
 
@@ -140,13 +122,7 @@ describe("static frontend serving (Phase 24 packaging)", () => {
       method: "GET",
       url: "/assets/../../" + path.basename(secretPath),
     });
-    // The escaping path never resolves to a real file inside staticDir, so
-    // @fastify/static correctly declines to serve it and the request falls
-    // through to this feature's own SPA-fallback 404 handler (a real GET,
-    // non-API path with no matching file) — 200 with the fallback
-    // index.html, not the secret file's content. Confirms the secret was
-    // never served, whichever of the two safe outcomes (an explicit
-    // reject, or falling through to the SPA fallback) actually occurred.
+
     expect(response.body).not.toContain("should never be servable");
     if (response.statusCode === 200) {
       expect(response.body).toContain("codebase-engineer-ui");

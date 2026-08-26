@@ -54,6 +54,30 @@ describe("selectContextForFinding", () => {
     expect(bundle.selected.find((s) => s.path === "src/caller.ts")!.reason).toMatch(/known caller/);
   });
 
+  // Regression coverage for a real audit finding: a circular import (B
+  // both imports and is imported by A) used to land in both the
+  // "imported" and "caller" candidate lists, getting included and
+  // token-counted twice.
+  it("includes a circularly-importing file only once, not twice", () => {
+    root = makeTempRepo();
+    writeFile(root, "src/a.ts", "import { b } from './b.js';\nexport function a() { return b(); }\n");
+    writeFile(root, "src/b.ts", "import { a } from './a.js';\nexport function b() { return 1; }\n");
+
+    const bundle = selectContextForFinding({
+      root,
+      finding: { id: "f1", filePath: "src/a.ts", lineStart: 2, lineEnd: 2 },
+      files: [file("src/a.ts", ["./b.js"]), file("src/b.ts", ["./a.js"])],
+      budgetTokens: 10_000,
+      includeContent: true,
+    });
+
+    const bMatches = bundle.selected.filter((s) => s.path === "src/b.ts");
+    expect(bMatches).toHaveLength(1);
+    // First-come wins: b.ts is discovered as an import of a.ts before it's
+    // discovered as a caller of a.ts, so that's the reason that survives.
+    expect(bMatches[0].reason).toMatch(/Imported by/);
+  });
+
   it("prefers a test file that imports the primary file over a naming-convention guess", () => {
     root = makeTempRepo();
     writeFile(root, "src/a.ts", "export function add(a: number, b: number) { return a + b; }\n");
@@ -74,7 +98,7 @@ describe("selectContextForFinding", () => {
   it("falls back to naming-convention test discovery when no test file imports the primary file", () => {
     root = makeTempRepo();
     writeFile(root, "src/a.ts", "export function add(a: number, b: number) { return a + b; }\n");
-    writeFile(root, "src/a.test.ts", "test('adds', () => {});\n"); // does not import a.ts
+    writeFile(root, "src/a.test.ts", "test('adds', () => {});\n"); 
 
     const bundle = selectContextForFinding({
       root,
@@ -155,14 +179,14 @@ describe("selectContextForFinding", () => {
   it("windows the primary file around the finding when the full file doesn't fit the budget", () => {
     root = makeTempRepo();
     const lines = Array.from({ length: 500 }, (_, i) => `// line ${i + 1}`);
-    lines[249] = "throw new Error('boom');"; // line 250, 1-indexed
+    lines[249] = "throw new Error('boom');"; 
     writeFile(root, "src/big.ts", lines.join("\n") + "\n");
 
     const bundle = selectContextForFinding({
       root,
       finding: { id: "f1", filePath: "src/big.ts", lineStart: 250, lineEnd: 250 },
       files: [file("src/big.ts")],
-      budgetTokens: 200, // too small for the full ~500-line file
+      budgetTokens: 200, 
     });
 
     const primary = bundle.selected.find((s) => s.path === "src/big.ts");
@@ -180,7 +204,7 @@ describe("selectContextForFinding", () => {
       root,
       finding: { id: "f1", filePath: "src/big.ts", lineStart: 250, lineEnd: 250 },
       files: [file("src/big.ts")],
-      budgetTokens: 1, // impossibly small
+      budgetTokens: 1, 
     });
 
     expect(bundle.selected).toEqual([]);
@@ -198,7 +222,7 @@ describe("selectContextForFinding", () => {
       root,
       finding: { id: "f1", filePath: "src/a.ts", lineStart: 2, lineEnd: 2 },
       files: [file("src/util.ts"), file("src/a.ts", ["./util.js"])],
-      // Enough for the small primary file, not enough left for util.ts too.
+
       budgetTokens: 40,
     });
 

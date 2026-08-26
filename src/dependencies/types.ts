@@ -16,7 +16,7 @@ export interface DependencyAnalysisResult {
   direct: DependencyInfo[];
   totalDirect: number;
   duplicates: DuplicateVersionGroup[];
-  /** Where duplicate-version detection came from, or why there isn't any. */
+
   duplicatesSource: string | null;
   duplicatesNote: string | null;
   analyzedAt: string;

@@ -2,14 +2,6 @@ import { describe, it, expect } from "vitest";
 import crypto from "node:crypto";
 import { verifyDodoWebhookSignature } from "../src/billing/webhookVerify.js";
 
-/**
- * Pure cryptographic logic — real HMAC-SHA256 test vectors, no mocking,
- * no network. Computes the expected signature the exact same way the
- * Standard Webhooks spec (which Dodo Payments implements) documents:
- * base64-decode the `whsec_`-prefixed secret, HMAC-SHA256 the
- * `${id}.${timestamp}.${payload}` signed content, base64-encode the
- * result, and format the header as `v1,<sig>`.
- */
 describe("verifyDodoWebhookSignature", () => {
   const secretB64 = Buffer.from("test_secret_value_32_bytes_long").toString("base64");
   const secret = `whsec_${secretB64}`;
@@ -81,7 +73,7 @@ describe("verifyDodoWebhookSignature", () => {
 
   it("rejects a timestamp far outside the tolerance window (replay protection)", () => {
     const sig = realSignature(id, timestamp, rawBody, secret);
-    const staleNow = nowSeconds + 3600; // 1 hour later, well past the 5-minute tolerance
+    const staleNow = nowSeconds + 3600; 
     expect(verifyDodoWebhookSignature(rawBody, { id, timestamp, signature: headerFor(sig) }, secret, staleNow)).toBe(false);
   });
 

@@ -15,12 +15,6 @@ export interface GitDetectionResult {
   workingTreeStatus: WorkingTreeStatus | null;
 }
 
-/**
- * Detects Git presence, current branch, and a coarse working-tree status
- * summary. This is intentionally minimal — full history/diff analysis is
- * Phase 8 (Git Analysis). Uses execFileSync (no shell interpolation) so
- * nothing in a crafted branch/file name can inject a shell command.
- */
 export function detectGit(root: string): GitDetectionResult {
   if (!fs.existsSync(path.join(root, ".git"))) {
     return { isGitRepository: false, branch: null, workingTreeStatus: null };
@@ -69,11 +63,9 @@ function safeGit(cwd: string, args: string[]): string | null {
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 10_000,
     });
-    // trimEnd only — status lines are fixed-width and meaningfully start
-    // with a leading status-code column; a full trim() would eat the first
-    // line's leading space and corrupt parsing.
+
     return output.replace(/\s+$/, "");
   } catch {
-    return null; // git not installed, detached HEAD edge case, or other failure
+    return null; 
   }
 }

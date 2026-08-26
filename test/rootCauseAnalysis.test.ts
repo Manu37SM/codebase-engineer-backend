@@ -95,7 +95,7 @@ describe("analyzeRootCause", () => {
     writeFile(repoRoot, "src/a.ts", 'const apiKey = "sk-verysecretvalue1234";\nexport const x = 1;\n');
 
     const projectId = randomUUID();
-    createProject(db, projectId, "test-project", repoRoot);
+    createProject(db, projectId, "test-project", repoRoot, null);
 
     const findingId = randomUUID();
     replaceProjectFindings(
@@ -178,7 +178,7 @@ describe("analyzeRootCause", () => {
     writeFile(repoRoot, "src/a.ts", "export const x = 1;\n");
 
     const projectId = randomUUID();
-    createProject(db, projectId, "test-project", repoRoot);
+    createProject(db, projectId, "test-project", repoRoot, null);
     const findingId = randomUUID();
     replaceProjectFindings(
       db,
@@ -225,7 +225,6 @@ describe("analyzeRootCause", () => {
         providerConfig: { id: "p1", name: "Test Provider", kind: "openai-compatible", baseUrl: url, model: "gpt-test", apiKey: null },
       });
 
-      // No explain-finding call was ever made for this finding — its operation_type slot must stay empty.
       expect(getLatestSuccessfulResponse(db, findingId, "explain-finding")).toBeUndefined();
       expect(getLatestSuccessfulResponse(db, findingId, ROOT_CAUSE_ANALYSIS_OPERATION_TYPE)).toBeTruthy();
     } finally {

@@ -1,7 +1,4 @@
--- Migration 001: initial schema
--- Placeholder core tables per docs/ARCHITECTURE.md §3.
--- These are intentionally minimal for Phase 0/1 (scaffold verification only);
--- columns will be extended as each phase's feature is implemented.
+
 
 CREATE TABLE IF NOT EXISTS project (
   id TEXT PRIMARY KEY,

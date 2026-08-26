@@ -8,16 +8,16 @@ import { estimateTokens as defaultEstimateTokens } from "../tokenEstimate.js";
 import type { ContextBundle, ContextItem, ExcludedItem, FileForSelection, FindingTarget } from "./types.js";
 
 const MANIFEST_FILES = ["package.json", "pom.xml"];
-/** Line-window sizes (lines of context on each side of the finding) tried, largest first, when the full primary file doesn't fit the budget. */
+
 const WINDOW_SIZES = [200, 80, 30, 10];
 
 interface Candidate {
-  /** Display path — usually a real file's relative path; the Git-diff item uses a synthetic label since it isn't file content. */
+
   path: string;
   reason: string;
-  /** Lazily computed (and already redacted) so we never read/redact a file we won't end up considering. */
+
   getContent: () => string | null;
-  /** True only for the primary file — the one candidate eligible for line-windowed truncation instead of a hard include/exclude. */
+
   isPrimary?: boolean;
 }
 
@@ -27,34 +27,10 @@ export interface SelectContextOptions {
   files: FileForSelection[];
   budgetTokens: number;
   estimateTokensFn?: (text: string) => number;
-  /**
-   * When true, each selected item's actual (redacted) text is attached as
-   * `content`. Defaults to false so the existing preview API/UI (Phase 13)
-   * keeps returning the lightweight summary docs/AI_MODE.md §3 defines,
-   * without every finding-context request paying to serialize full file
-   * bodies over HTTP. Phase 14's `explainFinding` workflow, which actually
-   * builds a prompt from this content, passes `true`.
-   */
+
   includeContent?: boolean;
 }
 
-/**
- * Builds a `ContextBundle` for a `Finding` target, per docs/AI_MODE.md §3's
- * selection order: directly affected file → directly relevant methods/
- * functions → imported symbols used at the finding site → known callers →
- * associated test file(s) → relevant config → relevant Git diff hunk.
- *
- * "Directly relevant methods/functions" is approximated by windowing the
- * primary file around the finding's line range when the full file doesn't
- * fit the budget — this product has no AST parser (imports are
- * regex-extracted, same documented tradeoff as everywhere else), so true
- * function-boundary extraction isn't attempted rather than faked.
- *
- * Every candidate's content is redacted (`security/secretPatterns.ts`)
- * before it's ever counted toward the budget — per docs/SECURITY.md §4,
- * redaction happens before network egress, not after, and this is the
- * only place in the codebase content is assembled for that purpose.
- */
 export function selectContextForFinding(options: SelectContextOptions): ContextBundle {
   const { root, finding, files, budgetTokens } = options;
   const estimateTokensFn = options.estimateTokensFn ?? defaultEstimateTokens;
@@ -63,13 +39,6 @@ export function selectContextForFinding(options: SelectContextOptions): ContextB
   const primaryFile = files.find((f) => f.relativePath === finding.filePath);
   const candidates: Candidate[] = [];
 
-  // 1. Directly affected file (handled specially below for windowing — not
-  // pushed through the generic candidate list since it needs different
-  // include/exclude logic).
-
-  // 2. Imported symbols used at the finding site, and 3. known callers —
-  // both derived from the same file-level import graph the Architecture
-  // explorer and the missing-test-file rule already use.
   const importable: ImportableFile[] = files.map((f) => ({
     relativePath: f.relativePath,
     language: f.language,
@@ -80,32 +49,41 @@ export function selectContextForFinding(options: SelectContextOptions): ContextB
   const importedPaths = edges.filter((e) => e.fromPath === finding.filePath).map((e) => e.toPath);
   const callerPaths = edges.filter((e) => e.toPath === finding.filePath).map((e) => e.fromPath);
 
+  // Dedupes across ALL of the pushes below, not just within one list —
+  // without this, a circular import (the finding's file and another file
+  // importing each other) lands in both `importedPaths` and
+  // `callerPaths`/`nonTestCallerPaths`, and would otherwise be added as
+  // two separate candidates: double-counted against the token budget and,
+  // with `includeContent: true`, sent to the AI provider twice. First
+  // push for a given path wins; later duplicates are silently skipped.
+  const seenCandidatePaths = new Set<string>();
+  function pushCandidateOnce(candidate: Candidate): void {
+    if (seenCandidatePaths.has(candidate.path)) return;
+    seenCandidatePaths.add(candidate.path);
+    candidates.push(candidate);
+  }
+
   for (const importedPath of dedupe(importedPaths)) {
-    candidates.push({
+    pushCandidateOnce({
       path: importedPath,
       reason: `Imported by ${finding.filePath}, the file where the finding was reported.`,
       getContent: () => readAndRedact(root, importedPath),
     });
   }
 
-  // Test-file callers get their own, more specific candidate below — skip
-  // them here so a test-file caller doesn't appear twice with two reasons.
   const nonTestCallerPaths = callerPaths.filter((p) => !files.find((f) => f.relativePath === p)?.isTest);
   for (const callerPath of dedupe(nonTestCallerPaths)) {
-    candidates.push({
+    pushCandidateOnce({
       path: callerPath,
       reason: `Imports ${finding.filePath} — a known caller of the affected file.`,
       getContent: () => readAndRedact(root, callerPath),
     });
   }
 
-  // 4. Associated test file(s): prefer a caller that's itself a test file
-  // (the same usage-based signal the missing-test-file rule uses); fall
-  // back to the naming-convention check only if no test file imports it.
   const callerTestPaths = callerPaths.filter((p) => files.find((f) => f.relativePath === p)?.isTest);
   if (callerTestPaths.length > 0) {
     for (const testPath of dedupe(callerTestPaths)) {
-      candidates.push({
+      pushCandidateOnce({
         path: testPath,
         reason: `Test file that imports ${finding.filePath}.`,
         getContent: () => readAndRedact(root, testPath),
@@ -114,7 +92,7 @@ export function selectContextForFinding(options: SelectContextOptions): ContextB
   } else {
     const conventionTestPath = findTestByNamingConvention(finding.filePath, files);
     if (conventionTestPath) {
-      candidates.push({
+      pushCandidateOnce({
         path: conventionTestPath,
         reason: `Test file matching ${finding.filePath}'s naming convention (no importing test file found).`,
         getContent: () => readAndRedact(root, conventionTestPath),
@@ -122,24 +100,17 @@ export function selectContextForFinding(options: SelectContextOptions): ContextB
     }
   }
 
-  // 5. Relevant config — this product's manifest-based dependency analysis
-  // (Phase 10) only looks at a root-level package.json/pom.xml, so that's
-  // the same "relevant config" this reuses, rather than inventing a
-  // separate per-directory config resolution strategy.
   for (const manifestName of MANIFEST_FILES) {
     if (files.some((f) => f.relativePath === manifestName)) {
-      candidates.push({
+      pushCandidateOnce({
         path: manifestName,
         reason: "Project's main dependency manifest, for build/framework context.",
         getContent: () => readAndRedact(root, manifestName),
       });
-      break; // at most one — a project has either an npm or a Maven manifest, not both, per Phase 10's dependency analyzer.
+      break; 
     }
   }
 
-  // 6. Relevant Git diff hunk — only meaningful if the primary file has
-  // uncommitted changes; skipped entirely (not even considered, let alone
-  // excluded-for-budget) when it doesn't, or the repo has no Git history.
   if (detectGit(root).isGitRepository) {
     const diffLabel = `${finding.filePath} (uncommitted diff)`;
     candidates.push({
@@ -156,7 +127,6 @@ export function selectContextForFinding(options: SelectContextOptions): ContextB
   const excluded: ExcludedItem[] = [];
   let remaining = budgetTokens;
 
-  // Primary file first, with windowing if the full file doesn't fit.
   if (primaryFile) {
     const full = readAndRedact(root, finding.filePath);
     if (full === null) {
@@ -196,9 +166,7 @@ export function selectContextForFinding(options: SelectContextOptions): ContextB
   for (const candidate of candidates) {
     const content = candidate.getContent();
     if (content === null) {
-      // Not an exclusion in the "budget" sense — the item genuinely has
-      // nothing to contribute (e.g. no uncommitted diff), so it's simply
-      // not selected, not reported as a budget casualty.
+
       continue;
     }
     const tokens = estimateTokensFn(content);

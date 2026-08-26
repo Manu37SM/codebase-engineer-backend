@@ -28,7 +28,7 @@ describe("resolveWithinRoot", () => {
   });
 
   it("rejects a crafted path that only textually starts with the root", () => {
-    // e.g. root "/tmp/some-project" vs sibling "/tmp/some-project-evil"
+
     expect(() => resolveWithinRoot(root, "/tmp/some-project-evil/file")).toThrow(
       PathTraversalError
     );

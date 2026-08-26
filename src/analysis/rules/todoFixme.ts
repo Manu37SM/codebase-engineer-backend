@@ -5,11 +5,6 @@ const MAX_LINES_IN_EVIDENCE = 5;
 
 const MARKER_PATTERN = /\b(TODO|FIXME|XXX)\b/;
 
-/**
- * Flags files with a notable concentration of TODO/FIXME/XXX markers.
- * Evidence lists the actual matching line numbers (capped) so the finding
- * can be verified by opening the file, not just trusted on the count alone.
- */
 export const todoFixmeRule: Rule = {
   id: "todo-fixme-density",
   run(ctx: AnalysisContext): Finding[] {

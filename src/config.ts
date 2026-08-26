@@ -3,45 +3,14 @@ import os from "node:os";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
-/**
- * Central config loading. Keep this minimal for Phase 0/1 — no AI provider
- * secrets are loaded or required here. AI provider configuration lives in
- * the `provider_configuration` DB table (see docs/ARCHITECTURE.md §3),
- * never in process env dumped to the frontend.
- */
 export interface AppConfig {
   port: number;
   host: string;
   dataDir: string;
   dbPath: string;
-  /**
-   * Directory containing the built frontend (`index.html` + assets), or
-   * `null` if none exists. Phase 24 packaging: `npm run build` copies
-   * `frontend/dist` into `backend/dist/public` (see
-   * `scripts/copy-frontend.mjs`) so a single `node dist/server.js` can
-   * serve both the API and the UI on one port — see `docs/PACKAGING.md`.
-   * Resolved relative to this compiled module's own location (via
-   * `import.meta.url`), not `process.cwd()`, so it works regardless of
-   * which directory the process is started from. `null` in the normal
-   * `vitest` test run (this file executes from `src/`, where no `public/`
-   * directory exists) and in any environment where the frontend hasn't
-   * been built — the backend remains fully functional API-only in that
-   * case, exactly as it always has; static serving is additive, never
-   * required.
-   */
+
   staticDir: string | null;
-  /**
-   * Whether to trust `X-Forwarded-*` headers (passed straight through to
-   * Fastify's own `trustProxy` option). Off by default — a bare `node
-   * dist/server.js` talked to directly has no proxy in front of it, and
-   * blindly trusting forwarded headers from an untrusted client would let
-   * them spoof `request.protocol`/`request.ip`. Turn this on (`TRUST_PROXY=1`)
-   * once you put a real reverse proxy in front of this process (see
-   * docs/DEPLOYMENT.md's "Going live behind a reverse proxy" section) — it's
-   * what lets the session cookie's `secure` flag correctly turn on when the
-   * proxy terminates TLS, even though this process itself only ever speaks
-   * plain HTTP.
-   */
+
   trustProxy: boolean;
 }
 

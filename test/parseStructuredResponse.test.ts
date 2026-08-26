@@ -10,7 +10,7 @@ describe("parseStructuredSections", () => {
   });
 
   it("stops a section at ANY later header, not just the immediately-next one, when a middle header is missing", () => {
-    // TWO: is entirely absent — ONE's content must stop before THREE:, not swallow it.
+
     const raw = "ONE:\nfirst\n\nTHREE:\nthird";
     const result = parseStructuredSections(raw, HEADERS);
     expect(result.ONE).toBe("first");

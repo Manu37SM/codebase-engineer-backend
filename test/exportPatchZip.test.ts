@@ -21,10 +21,8 @@ describe("buildPatchZip (Task #90 — download-instead-of-apply)", () => {
     const zipBuffer = buildPatchZip(repoRoot, diff);
     expect(zipBuffer.length).toBeGreaterThan(0);
 
-    // The real file is untouched.
     expect(fs.readFileSync(`${repoRoot}/src/config.ts`, "utf-8")).toBe("const apiKey = 'sk-secret';\nexport const x = 1;\n");
 
-    // The zip has the patched content instead.
     const zip = new AdmZip(zipBuffer);
     const entry = zip.getEntry("src/config.ts");
     expect(entry).toBeTruthy();
@@ -44,7 +42,6 @@ describe("buildPatchZip (Task #90 — download-instead-of-apply)", () => {
     expect(entry).toBeTruthy();
     expect(zip.readAsText(entry!)).toContain("export const greeting");
 
-    // The real project directory never got the new file.
     expect(fs.existsSync(`${repoRoot}/src/new-file.ts`)).toBe(false);
   });
 

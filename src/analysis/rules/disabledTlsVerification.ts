@@ -7,42 +7,27 @@ interface TlsPattern {
 
 const PATTERNS: TlsPattern[] = [
   {
-    // Node.js https/TLS client option. Dogfooding this rule against its own
-    // source found that writing the option's key-value pair out literally
-    // anywhere in this file (even in a descriptive label or comment) made
-    // the file match its own regex — so this comment paraphrases instead
-    // of quoting the exact syntax. Same lesson applies below.
+
     pattern: /rejectUnauthorized\s*:\s*false/,
     label: "rejectUnauthorized set to false",
   },
   {
-    // Node.js process-wide escape hatch, sometimes set directly in code
-    // rather than only as an env var at invocation time.
+
     pattern: /NODE_TLS_REJECT_UNAUTHORIZED\s*=\s*['"]?0['"]?/,
     label: "NODE_TLS_REJECT_UNAUTHORIZED set to 0",
   },
   {
-    // Python requests/urllib3 and similar.
+
     pattern: /verify\s*=\s*False/,
     label: "verify parameter set to False",
   },
   {
-    // Java: a TrustManager that accepts everything is the classic
-    // "disable cert validation" pattern.
+
     pattern: /X509TrustManager[\s\S]{0,80}?checkServerTrusted[\s\S]{0,40}?\{\s*\}/,
     label: "empty checkServerTrusted() (accepts any certificate)",
   },
 ];
 
-/**
- * Flags source that disables TLS/certificate verification — a common way
- * to silence "self-signed cert" errors during development that
- * occasionally ships to production and defeats the entire point of TLS.
- * Regex-based, so a match in a comment or unreachable branch is possible;
- * that tradeoff (some false positives, but no fabricated matches) is the
- * same one every other rule in this engine makes — see docs/ARCHITECTURE.md
- * §6.
- */
 export const disabledTlsVerificationRule: Rule = {
   id: "disabled-tls-verification",
   run(ctx: AnalysisContext): Finding[] {

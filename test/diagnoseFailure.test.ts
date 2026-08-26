@@ -85,7 +85,7 @@ describe("diagnoseFailure", () => {
     writeFile(repoRoot, "src/a.test.ts", "import { add } from './a.js';\ntest('adds', () => expect(add(1, 2)).toBe(3));\n");
 
     const projectId = randomUUID();
-    createProject(db, projectId, "test-project", repoRoot);
+    createProject(db, projectId, "test-project", repoRoot, null);
 
     const runId = randomUUID();
     const run = saveTestRun(db, runId, projectId, {
@@ -167,7 +167,7 @@ describe("diagnoseFailure", () => {
     writeFile(repoRoot, "src/a.ts", "export function add(a, b) { return a - b; }\n");
 
     const projectId = randomUUID();
-    createProject(db, projectId, "test-project", repoRoot);
+    createProject(db, projectId, "test-project", repoRoot, null);
 
     const runId = randomUUID();
     const run = saveTestRun(db, runId, projectId, {

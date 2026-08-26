@@ -105,7 +105,7 @@ describe("analyzeDependencies — maven", () => {
       versionRange: "2.7.0",
       type: "dependency",
     });
-    // Unresolved property placeholder reported honestly as literal text, not resolved.
+
     expect(result.direct.find((d) => d.name === "junit:junit")?.versionRange).toBe("${junit.version}");
   });
 

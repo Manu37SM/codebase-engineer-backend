@@ -11,14 +11,6 @@ export type {
   DuplicateVersionGroup,
 } from "./types.js";
 
-/**
- * Computed live off the project's manifest/lockfile each call — same
- * pattern as Architecture (Phase 5) and Git analysis (Phase 8), not
- * persisted. Matches the ecosystems this product actually supports
- * elsewhere (Maven, npm-family): Gradle is detected for reporting purposes
- * (`discovery/buildSystem.ts`) but its dependency graph isn't parsed here,
- * same "not yet supported" stance as the Phase 9 test runner.
- */
 export function analyzeDependencies(root: string): DependencyAnalysisResult {
   const analyzedAt = new Date().toISOString();
 

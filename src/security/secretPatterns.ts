@@ -2,19 +2,10 @@ export interface SecretPattern {
   pattern: RegExp;
   label: string;
   severity: "critical" | "high";
-  /** Index of the capture group holding the sensitive value, for redaction. Undefined = whole match. */
+
   secretGroup?: number;
 }
 
-/**
- * Shared secret-pattern definitions — the single source of truth for both
- * the `hardcoded-secret` analysis rule (which reports *where* a likely
- * secret is) and the AI context-sanitization layer (which *redacts*
- * secrets from content before it's counted toward a token budget or sent
- * anywhere — docs/SECURITY.md §4). Keeping one list means the two can't
- * drift apart — a pattern the scanner would flag as a finding is exactly
- * the pattern the AI context layer strips.
- */
 export const SECRET_PATTERNS: SecretPattern[] = [
   {
     pattern: /-----BEGIN (RSA |EC |OPENSSH |DSA |)PRIVATE KEY-----/,
@@ -27,14 +18,43 @@ export const SECRET_PATTERNS: SecretPattern[] = [
     severity: "critical",
   },
   {
+    // AWS secret access keys are an unlabeled 40-char base64-ish string,
+    // so on their own they're indistinguishable from any other base64
+    // blob — only flagged when a nearby "secret"/"aws" keyword labels it,
+    // same conservative labeled-value approach as the generic credential
+    // pattern below.
+    pattern: /aws_?secret_?access_?key\s*[:=]\s*["']?([A-Za-z0-9/+=]{40})["']?/i,
+    label: "AWS secret access key",
+    severity: "critical",
+    secretGroup: 1,
+  },
+  {
+    // JWTs are self-labeling: the base64url header segment for a JWT
+    // always starts "eyJ" (base64 of `{"`), followed by ".<payload>.<sig>".
+    pattern: /eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/,
+    label: "JWT",
+    severity: "high",
+  },
+  {
+    // Quoted form, e.g. `apiKey = "sk-..."` in source.
     pattern: /(api[_-]?key|secret|password|token)\s*[:=]\s*["']([A-Za-z0-9\-_/+=]{12,})["']/i,
     label: "hardcoded credential-like value",
     severity: "high",
     secretGroup: 2,
   },
+  {
+    // Unquoted `.env`-style form, e.g. `API_KEY=sk-abc123...` or
+    // `PASSWORD=hunter2ProdDbPass` — the original quoted-only pattern
+    // above misses this common shape entirely. A slightly higher length
+    // floor (16 vs. 12) than the quoted form keeps this from tripping on
+    // short config values like `TOKEN_TTL_SECONDS=3600`.
+    pattern: /(api[_-]?key|secret|password|token|access[_-]?key)\s*=\s*([A-Za-z0-9\-_/+.]{16,})(?=\s|$)/im,
+    label: "hardcoded credential-like value (unquoted)",
+    severity: "high",
+    secretGroup: 2,
+  },
 ];
 
-/** Redacts a single sensitive value, never returning it in full. */
 export function redactValue(value: string): string {
   if (value.length <= 6) return "*".repeat(value.length);
   return `${value.slice(0, 4)}…${value.slice(-2)} (redacted, ${value.length} chars)`;
@@ -45,13 +65,6 @@ export interface RedactionResult {
   redactionCount: number;
 }
 
-/**
- * Scans `text` for every `SECRET_PATTERNS` match and replaces the sensitive
- * portion in place with a redaction marker, returning the sanitized text.
- * Used by the AI context-selection layer (Phase 13) so that file content
- * is never counted toward a token budget or included in a `ContextBundle`
- * with a live secret still in it.
- */
 export function redactSecretsInText(text: string): RedactionResult {
   let result = text;
   let redactionCount = 0;

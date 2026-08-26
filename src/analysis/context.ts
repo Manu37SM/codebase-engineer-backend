@@ -5,14 +5,6 @@ import { isTestFile, isGeneratedFile } from "../indexer/classify.js";
 import { extractImports } from "../indexer/imports.js";
 import type { AnalysisContext, AnalysisFileContext } from "./types.js";
 
-/**
- * Builds the analysis rules' input by walking the repository fresh off
- * disk. Rules need raw text (for line-level evidence like large functions
- * or TODO counts), which the persisted `file` index doesn't store — so
- * analysis re-walks rather than reading from the Phase 3 index. This keeps
- * findings evidence traceable to the actual current file content, not a
- * potentially-stale index.
- */
 export function buildAnalysisContext(root: string): AnalysisContext {
   assertValidProjectRoot(root);
 

@@ -1,9 +1,4 @@
-/**
- * Deterministic, evidence-based test/generated-file classification. Never
- * guesses from content semantics — only filename/path patterns and explicit
- * generated-file markers, per the "never fabricate evidence" rule
- * (docs/ARCHITECTURE.md §6).
- */
+
 
 const TEST_PATH_SEGMENT_PATTERN = /(^|\/)(test|tests|__tests__|spec)(\/|$)/i;
 const TEST_FILENAME_PATTERN = /\.(test|spec)\.[a-z0-9]+$/i;

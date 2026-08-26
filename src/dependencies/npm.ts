@@ -15,7 +15,7 @@ export function parsePackageJsonDependencies(root: string): DependencyInfo[] {
   try {
     pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
   } catch {
-    return []; // malformed package.json — nothing to honestly report
+    return []; 
   }
 
   const direct: DependencyInfo[] = [];
@@ -37,16 +37,6 @@ interface PackageLockJson {
   packages?: Record<string, LockPackageEntry>;
 }
 
-/**
- * Detects packages resolved at more than one distinct version across the
- * dependency tree, using npm lockfile v2/v3's flat `packages` map (the
- * format written by npm 7+, keyed by node_modules path — e.g.
- * `node_modules/lodash` or a nested
- * `node_modules/some-pkg/node_modules/lodash` for a version conflict).
- * Older lockfileVersion 1 (nested `dependencies` tree, npm <7) isn't
- * parsed — returns an empty list with a note explaining why, rather than
- * fabricating results from a format this doesn't understand.
- */
 export function findDuplicateVersions(root: string): {
   duplicates: DuplicateVersionGroup[];
   source: string | null;
@@ -74,7 +64,7 @@ export function findDuplicateVersions(root: string): {
 
   const versionsByName = new Map<string, Set<string>>();
   for (const [pkgPath, entry] of Object.entries(lock.packages)) {
-    if (pkgPath === "" || !entry.version) continue; // "" is the root project itself
+    if (pkgPath === "" || !entry.version) continue; 
     const name = packageNameFromLockPath(pkgPath);
     if (!name) continue;
     if (!versionsByName.has(name)) versionsByName.set(name, new Set());
@@ -92,7 +82,6 @@ export function findDuplicateVersions(root: string): {
   return { duplicates, source: "package-lock.json", note: null };
 }
 
-/** Extracts a package name from a lockfile v2/v3 packages-map key, e.g. "node_modules/a/node_modules/@scope/b" -> "@scope/b". */
 function packageNameFromLockPath(lockPath: string): string | null {
   const segments = lockPath.split("node_modules/");
   const last = segments[segments.length - 1];

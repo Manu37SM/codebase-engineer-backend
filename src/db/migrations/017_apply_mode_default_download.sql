@@ -1,16 +1,3 @@
--- Task (user-reported bug batch, Aug 2026): new projects now default to
--- apply_mode = 'download' at the application layer (see
--- db/projectRepo.ts's createProject) instead of 'direct'
--- (015_project_apply_mode.sql's original column default, still 'direct'
--- for SQLite's own ALTER TABLE ADD COLUMN semantics, which cannot be
--- changed after the fact without a full table rebuild — not worth it for
--- a single-column default no code path relies on anymore).
---
--- On a genuinely local install, "direct" (write approved AI-Mode patches
--- straight to disk) is meaningful and still fully supported. On *this*
--- deployment (a remote server reached over the network) "direct" would
--- write into the server's own filesystem, not the user's machine — not
--- useful, and easy to be surprised by. Flip any project that's still on
--- the old 'direct' default over to 'download' so the "AI apply" setting
--- reflects a mode that actually gets the changed files to the user.
+
+
 UPDATE project SET apply_mode = 'download' WHERE apply_mode = 'direct';

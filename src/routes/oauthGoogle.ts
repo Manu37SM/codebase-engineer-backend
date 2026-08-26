@@ -22,18 +22,7 @@ interface RegisterGoogleOAuthRoutesOptions {
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo";
-// Task #86: adds Drive read access so a signed-in user can browse their own
-// Drive for a zip file to import (`routes/googleDrive.ts`). `drive.readonly`
-// is deliberately broader than "just the files this app created"
-// (`drive.file`) because `drive.file` can only see files the app itself
-// created/opened via the picker UI — it cannot list or search a user's
-// *existing* zip files by mimetype, which is exactly what Task #86 needs
-// without pulling in Google's separate client-side Picker JS widget. Same
-// "broad scope is the tradeoff for browsing existing files without a
-// picker widget" reasoning already used for GitHub's `repo` scope
-// (Task #83/#84) — still local-first: the token only ever downloads bytes
-// onto this same machine, nothing is stored or proxied server-side beyond
-// the encrypted token itself.
+
 const SCOPES = "openid email profile https://www.googleapis.com/auth/drive.readonly";
 
 interface GoogleUserInfo {
@@ -43,17 +32,6 @@ interface GoogleUserInfo {
   name?: string;
 }
 
-/**
- * Google sign-in (Task #82) — authentication only, per the user's explicit
- * architecture instruction ("GitHub OAuth is only for authentication and
- * repository access... Do not redesign it as a hosted multi-user SaaS").
- * Standard OAuth 2.0 authorization-code flow: /start redirects to Google,
- * /callback exchanges the code, fetches the account's stable Google `sub`
- * + email, and either links to an existing local account (matched by
- * email) or creates a new passwordless one, then logs the browser in with
- * the normal session cookie (`auth/session.ts`, shared with local
- * email/password login).
- */
 export function registerGoogleOAuthRoutes(app: FastifyInstance, { db }: RegisterGoogleOAuthRoutesOptions): void {
   app.get("/api/v1/auth/google/start", async (request, reply) => {
     const config = getGoogleOAuthConfig();
@@ -135,17 +113,6 @@ export function registerGoogleOAuthRoutes(app: FastifyInstance, { db }: Register
       return reply.status(502).send({ error: "Google did not return a stable account id." });
     }
 
-    // Bug fix: previously this callback always ran a plain "sign in" (match
-    // by email or create a new user, then overwrite the session cookie) —
-    // so clicking "Connect Google" for Drive access *while already signed
-    // in via GitHub* silently swapped the active session onto a different
-    // (or brand-new) account, which is exactly what the user reported as
-    // "logs in Google and logs out of GitHub and vice versa", and is also
-    // why the Drive file picker looked like it hung: the browser had been
-    // switched onto an account whose `driveConnected` the already-rendered
-    // UI never knew to re-check. Fix: if this browser already has a valid
-    // session, treat this as *linking* Google (and its Drive scope) onto
-    // the currently signed-in account instead of switching accounts.
     const currentUserId = resolveCurrentUserId(request, db);
 
     let identity = getOauthIdentity(db, "google", userInfo.sub);
@@ -153,9 +120,7 @@ export function registerGoogleOAuthRoutes(app: FastifyInstance, { db }: Register
 
     if (identity) {
       userId = identity.user_id;
-      // Refresh the stored (encrypted) tokens on every login — Google only
-      // returns a refresh_token on the FIRST consent, so a missing one here
-      // just means "keep whatever we already had", not "clear it".
+
       updateOauthTokens(
         db,
         identity.id,
@@ -163,9 +128,7 @@ export function registerGoogleOAuthRoutes(app: FastifyInstance, { db }: Register
         tokenBody.refresh_token ? encryptToken(tokenBody.refresh_token) : null
       );
     } else if (currentUserId) {
-      // Already signed in and this Google account isn't linked to anyone
-      // yet — attach it to the *current* account rather than matching by
-      // email or creating a separate one.
+
       userId = currentUserId;
       const email = userInfo.email?.toLowerCase() ?? null;
       createOauthIdentity(db, randomUUID(), {
@@ -177,12 +140,7 @@ export function registerGoogleOAuthRoutes(app: FastifyInstance, { db }: Register
         refreshTokenEnc: tokenBody.refresh_token ? encryptToken(tokenBody.refresh_token) : null,
       });
     } else {
-      // No identity linked yet and no existing session — link to an
-      // existing local account with the same email if one exists (so
-      // someone who registered with alice@example.com/password and later
-      // clicks "Sign in with Google" using the same address lands in the
-      // same account), otherwise create a brand-new passwordless account
-      // for this Google identity.
+
       const email = userInfo.email?.toLowerCase() ?? null;
       const existingUser = email ? getUserByEmail(db, email) : undefined;
       if (existingUser) {
@@ -205,18 +163,11 @@ export function registerGoogleOAuthRoutes(app: FastifyInstance, { db }: Register
       });
     }
 
-    // Only mint/overwrite the session cookie when the account we ended up
-    // on differs from (or there wasn't) an existing session — linking onto
-    // the already-active account should leave that session exactly as it
-    // was, not churn a new token for no reason.
     if (userId !== currentUserId) {
       const sessionToken = createSession(db, randomUUID(), userId);
       setSessionCookie(request, reply, sessionToken);
     }
 
-    // Redirect back into the SPA rather than returning JSON — this is a
-    // real browser navigation (the user just came back from Google's
-    // consent screen), not an API call a script is awaiting.
     return reply.redirect("/");
   });
 }

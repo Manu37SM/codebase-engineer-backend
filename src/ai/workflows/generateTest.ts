@@ -11,9 +11,9 @@ import { parseStructuredSections } from "./parseStructuredResponse.js";
 export const GENERATE_TEST_OPERATION_TYPE = "test-generation";
 
 export interface GeneratedTestData {
-  /** A relative, project-root-relative path for a NEW test file — null if the response didn't clearly contain one, or the model declined (NO_TEST). */
+
   targetPath: string | null;
-  /** The complete test file content — null under the same conditions as targetPath. Never fabricated: a response missing this section leaves it null rather than guessing code. */
+
   testCode: string | null;
   raw: string;
 }
@@ -24,7 +24,7 @@ export interface GenerateTestOptions {
   projectRoot: string;
   finding: FindingRecord;
   files: FileForSelection[];
-  /** The row from `provider_configuration` to use — the caller (the route) is responsible for picking an enabled one. */
+
   providerConfig: ProviderConfig & { id: string; name: string };
   budgetTokens?: number;
 }
@@ -39,30 +39,6 @@ export interface GenerateTestResult {
   usage: AICompletionResult["usage"];
 }
 
-/**
- * Phase 19's AI workflow: asks the provider for a complete, real test
- * file (not a diff — the target file doesn't exist yet) exercising the
- * behavior a finding is about. Grounded in the finding's most recent
- * Phase 16 fix plan's "Required Tests" section when one exists, same
- * "consume a prior workflow's output" pattern as Phases 16-17.
- *
- * Unlike Phase 17's patch generation (a diff against an existing file,
- * later applied in place), test generation only ever proposes a NEW
- * file — the write step (Phase 19's route layer) refuses to overwrite an
- * existing path. This keeps the write side of this feature simple and
- * safe without needing Phase 18's dry-run-first machinery: there's
- * nothing to conflict with yet.
- *
- * This function returns the provider's raw, UNVALIDATED text, split into
- * a proposed path and file content by `parseGeneratedTest()` below — it
- * does not check the code compiles, parses, or is even syntactically
- * plausible for the project's language. Per docs/AI_MODE.md §1
- * ("AI-generated tests ... not trusted on compile alone"), the only
- * thing that actually verifies this content is real is the later
- * write-and-run step, which writes it to disk and runs it through the
- * project's real, existing test command (Phase 9) — never a heuristic
- * here.
- */
 export async function generateTest(options: GenerateTestOptions): Promise<GenerateTestResult> {
   const priorFixPlan = getLatestSuccessfulResponse(options.db, options.finding.id, FIX_PLAN_OPERATION_TYPE);
   const requiredTestsHint = priorFixPlan ? parseFixPlanSections(priorFixPlan.content ?? "").requiredTests : null;
@@ -126,7 +102,6 @@ export function parseGeneratedTest(raw: string): GeneratedTestData {
   return { targetPath: targetPath || null, testCode, raw };
 }
 
-/** Providers frequently wrap code in a markdown fence despite being told not to — strip one if the whole section is wrapped in exactly one, never a fence appearing mid-content. */
 function stripCodeFence(text: string): string {
   const fenceMatch = text.match(/^```[^\n]*\n([\s\S]*?)\n```\s*$/);
   return fenceMatch ? fenceMatch[1] : text;

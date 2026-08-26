@@ -129,14 +129,14 @@ describe("selectContextForTestFailure", () => {
       root,
       testRun: { id: "run1", command: "vitest run", framework: "vitest", stdout: longOutput, stderr: "" },
       files: [],
-      budgetTokens: 150, // small — forces truncation, but leaves room for the smallest 500-char tail
+      budgetTokens: 150, 
       includeContent: true,
     });
 
     const primary = bundle.selected.find((s) => s.path === "(test run output)");
     expect(primary).toBeTruthy();
     expect(primary!.content!.length).toBeLessThan(longOutput.length);
-    // The tail (where the real failure detail lives) must survive truncation.
+
     expect(primary!.content).toContain("AssertionError");
   });
 

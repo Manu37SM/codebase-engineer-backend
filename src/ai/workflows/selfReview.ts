@@ -16,25 +16,16 @@ export interface SelfReviewOptions {
   finding: FindingRecord;
   patch: PatchRecord;
   files: FileForSelection[];
-  /** The row from `provider_configuration` to use — the caller (the route) is responsible for picking an enabled one. */
+
   providerConfig: ProviderConfig & { id: string; name: string };
   budgetTokens?: number;
 }
 
-/** One of docs/AI_MODE.md §6's seven self-review checklist items. `status` is `null`, never guessed, when the response didn't clearly state one. */
 export interface SelfReviewCheck {
   status: "pass" | "concern" | "fail" | null;
   note: string | null;
 }
 
-/**
- * The parsed form of the model's response, per docs/AI_MODE.md §6's
- * self-review checklist, applied to a real proposed patch (its diff)
- * rather than a Finding or a TestRun. Every field the response doesn't
- * clearly address is left with a `null` status/note — never fabricated —
- * same honesty rule every other structured-response parser in this
- * codebase follows.
- */
 export interface ParsedSelfReview {
   correctness: SelfReviewCheck;
   scopeCreep: SelfReviewCheck;
@@ -43,7 +34,7 @@ export interface ParsedSelfReview {
   missingTests: SelfReviewCheck;
   unnecessaryComplexity: SelfReviewCheck;
   architectureConsistency: SelfReviewCheck;
-  /** The full, unparsed model response — always present, so a parsing miss never loses information, just structure. */
+
   raw: string;
 }
 
@@ -56,24 +47,6 @@ export interface SelfReviewResult {
   usage: AICompletionResult["usage"];
 }
 
-/**
- * Phase 21's AI workflow: docs/AI_MODE.md §6's self-review checklist —
- * correctness, scope creep, regressions, security, missing tests,
- * unnecessary complexity, and consistency with existing architecture —
- * run against a real proposed patch's real diff text. Per §6, "self-
- * review output is shown alongside the diff, not used to auto-approve":
- * this is advisory only, exactly like Phase 15's root-cause analysis and
- * Phase 20's failure diagnosis. It never changes the patch's `status`,
- * never blocks `/approve-apply` or `/apply`, and can be requested (or
- * re-requested) at any point once a patch has a real `diff_text` —
- * there's no separate approval gate for it, because it isn't one.
- *
- * Reuses `runFindingWorkflow` (self-review's grounding is the same
- * Finding + context-bundle shape generation itself used — the patch adds
- * only its diff text on top, not a different target kind), unlike Phase
- * 20's `diagnoseFailure`, which genuinely needed a different context
- * shape for a `TestRun` target.
- */
 export async function selfReviewPatch(options: SelfReviewOptions): Promise<SelfReviewResult> {
   const { patch } = options;
   if (!patch.diff_text) {
@@ -134,16 +107,6 @@ function buildSelfReviewPrompt(
   return { system, user };
 }
 
-/**
- * Parses the model's seven-checklist response via the shared
- * `parseStructuredSections` root-cause analysis, fix planning, and
- * failure diagnosis all use. Each section is expected to start with a
- * pass/concern/fail status word followed by a note (e.g. "concern - the
- * diff also reformats an unrelated function"); a section that doesn't
- * match that shape gets `status: null` but keeps whatever text was there
- * as `note`, so nothing the model said is silently dropped even when it
- * doesn't follow the exact format.
- */
 export function parseSelfReviewSections(raw: string): ParsedSelfReview {
   const sections = parseStructuredSections(raw, SELF_REVIEW_HEADERS);
   return {

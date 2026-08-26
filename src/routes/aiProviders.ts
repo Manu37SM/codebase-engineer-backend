@@ -15,14 +15,6 @@ interface RegisterAiProviderRoutesOptions {
   db: DB;
 }
 
-/**
- * Configuration + status-check surface for AI providers (docs/AI_MODE.md
- * §2). This is scaffolding: nothing here calls `complete()` to actually run
- * an AI-Mode feature yet (that starts at Phase 14, once Phase 13's context
- * engine exists) — these routes only let a provider be configured, listed,
- * and tested for reachability. `api_key` is never included in any response
- * (see `db/aiProviderRepo.ts#toPublic`).
- */
 export function registerAiProviderRoutes(app: FastifyInstance, { db }: RegisterAiProviderRoutesOptions) {
   app.post("/api/v1/ai/providers", async (request, reply) => {
     const body = request.body as

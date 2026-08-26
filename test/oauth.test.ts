@@ -27,7 +27,6 @@ function extractCookieValue(setCookieHeader: string | string[] | undefined, name
   return null;
 }
 
-/** Fakes the JSON response `fetch` would give for a given URL substring. */
 function fakeFetchResponding(map: Record<string, unknown>) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
@@ -65,7 +64,7 @@ describe("OAuth sign-in (Google + GitHub)", () => {
     }
     global.fetch = originalFetch;
     app.close();
-    // See auth.test.ts's afterEach for why this is required on Windows.
+
     db.close();
     fs.rmSync(tmpDbDir, { recursive: true, force: true });
   });
@@ -134,7 +133,7 @@ describe("OAuth sign-in (Google + GitHub)", () => {
 
       const identity = getOauthIdentity(db, "google", "google-123");
       expect(identity).toBeTruthy();
-      expect(identity!.access_token_enc).not.toContain("fake-google-access-token"); // stored encrypted, not plaintext
+      expect(identity!.access_token_enc).not.toContain("fake-google-access-token"); 
     });
 
     it("logging in a second time with the same Google account reuses the same user (no duplicate)", async () => {
@@ -157,7 +156,6 @@ describe("OAuth sign-in (Google + GitHub)", () => {
       const secondRes = await doLogin();
       expect(secondRes.statusCode).toBe(302);
 
-      // Still exactly one user for that email.
       const user = getUserByEmail(db, "again@example.com");
       expect(user).toBeTruthy();
     });
@@ -205,13 +203,7 @@ describe("OAuth sign-in (Google + GitHub)", () => {
   });
 
   describe("account linking when completing a second provider's flow while already signed in", () => {
-    // Regression coverage for a real reported bug: completing GitHub OAuth
-    // while already signed in via Google (or vice versa — e.g. clicking
-    // "Connect Google" from the repo-register form's Google Drive tab
-    // while signed in with GitHub) used to silently switch the active
-    // session onto a *different* account instead of linking the new
-    // provider onto the one already signed in. See the doc comments in
-    // routes/oauthGoogle.ts and routes/oauthGithub.ts.
+
     beforeEach(() => {
       process.env.GOOGLE_CLIENT_ID = "test-google-client-id";
       process.env.GOOGLE_CLIENT_SECRET = "test-google-client-secret";
@@ -224,9 +216,7 @@ describe("OAuth sign-in (Google + GitHub)", () => {
         "github.com/login/oauth/access_token": { access_token: "gh-access-token" },
         "api.github.com/user": { id: 111, login: "linker", name: "Linker", email: "linker@example.com" },
         "oauth2.googleapis.com/token": { access_token: "google-access-token", refresh_token: "google-refresh" },
-        // Deliberately a *different* email than the GitHub account — if
-        // linking regressed back to "match/create by email", this would
-        // prove it by creating a second user instead of reusing the first.
+
         "googleapis.com/oauth2/v3/userinfo": { sub: "google-999", email: "different-email@example.com" },
       }) as unknown as typeof fetch;
 
@@ -255,12 +245,8 @@ describe("OAuth sign-in (Google + GitHub)", () => {
       });
       expect(googleCallback.statusCode).toBe(302);
 
-      // Linking onto the already-active account shouldn't mint/overwrite
-      // the session cookie — the browser was already signed in.
       expect(extractCookieValue(googleCallback.headers["set-cookie"], "ce_session")).toBeNull();
 
-      // The Google identity is attached to the *same* user the GitHub
-      // sign-in created — no second account for the different email.
       const googleIdentity = getOauthIdentity(db, "google", "google-999");
       expect(googleIdentity).toBeTruthy();
       expect(googleIdentity!.user_id).toBe(githubUser!.id);

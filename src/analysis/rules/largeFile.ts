@@ -3,11 +3,6 @@ import type { AnalysisContext, Finding, Rule } from "../types.js";
 const HIGH_THRESHOLD = 800;
 const MEDIUM_THRESHOLD = 400;
 
-/**
- * Flags source files whose line count crosses a fixed threshold. LOC alone
- * is a blunt signal, but it's a real, uncontestable measurement — exactly
- * the kind of "detected fact" docs/PRD.md §3 distinguishes from inference.
- */
 export const largeFileRule: Rule = {
   id: "large-file",
   run(ctx: AnalysisContext): Finding[] {

@@ -27,7 +27,7 @@ describe("patchRepo", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ce-patch-repo-test-"));
     db = openDatabase(path.join(tmpDir, "test.db"));
     projectId = randomUUID();
-    createProject(db, projectId, "test-project", "/tmp/test-project-" + randomUUID());
+    createProject(db, projectId, "test-project", "/tmp/test-project-" + randomUUID(), null);
     findingId = randomUUID();
     replaceProjectFindings(
       db,
@@ -127,6 +127,6 @@ describe("patchRepo", () => {
     const failed = getPatchById(db, id)!;
     expect(failed.status).toBe("failed");
     expect(failed.apply_error).toBe("error: patch does not apply");
-    expect(failed.diff_text).toBe(diff); // retrying doesn't require regenerating the diff
+    expect(failed.diff_text).toBe(diff); 
   });
 });

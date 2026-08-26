@@ -9,17 +9,6 @@ import { scanSecurity } from "../security/scan.js";
 import { analyzeDependencies } from "../dependencies/index.js";
 import type { AuditReport, AuditSnapshotSummary } from "./types.js";
 
-/**
- * Builds a single consolidated audit view by aggregating this product's
- * existing per-feature data sources — it does not run any new analysis of
- * its own. Some of what it reports is persisted (the repository snapshot
- * from the last Scan, findings from the last "Run Analysis") and some is
- * computed live right now (security scan, dependency analysis, Git
- * activity) — same "computed vs. persisted" split used by every other
- * feature in this product; the audit report is a read-only aggregation, so
- * there is nothing new to persist. Nothing here is cached: calling this
- * twice in a row re-reads the DB and re-walks the repo both times.
- */
 export function buildAuditReport(db: DB, project: ProjectRecord): AuditReport {
   const generatedAt = new Date().toISOString();
 

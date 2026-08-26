@@ -3,41 +3,12 @@ import path from "node:path";
 import os from "node:os";
 import AdmZip from "adm-zip";
 
-/**
- * Registration by plain zip/download URL (Task #85) — downloads a zip
- * archive and extracts it locally, exactly like unzipping a downloaded
- * file yourself. Still local-first: the archive is fetched and extracted
- * onto this same machine, under its own data directory.
- */
-
-const MAX_DOWNLOAD_BYTES = 500 * 1024 * 1024; // 500 MB — generous for a source archive, not unbounded.
+const MAX_DOWNLOAD_BYTES = 500 * 1024 * 1024; 
 
 export class ZipDownloadError extends Error {}
 
-/**
- * Downloads `url`, extracts it into `destDir` (which must not already
- * exist), and — if the archive's contents are a single top-level
- * directory (the common case for a GitHub/GitLab "Download ZIP", which
- * wraps everything in `<repo>-<branch>/`) — flattens that one level so
- * `destDir` itself is the actual project root rather than a wrapper
- * directory containing it.
- */
-// User-report fix: pasting a Google Drive "share" link
-// (drive.google.com/file/d/<id>/view) here downloads Drive's HTML viewer
-// page, not the zip's bytes — the resulting "archive" is actually a
-// webpage, which AdmZip then fails to open with an opaque "No END header
-// found" error that gives the user no idea what went wrong. Catch this
-// specific, common mistake up front with an actionable message rather than
-// letting it fail deep inside the zip parser.
 const GOOGLE_DRIVE_LINK_PATTERN = /^https?:\/\/(drive|docs)\.google\.com\//i;
 
-// User-report fix #2: a 1drv.ms/OneDrive share link (a different cloud
-// host than Drive, same underlying mistake) was outright rejected with a
-// bare "403 Forbidden" from Microsoft's edge before it even reached the
-// html-page detection below — Node's fetch sends no/minimal User-Agent by
-// default, and OneDrive's CDN (like many others) blocks that as basic bot
-// mitigation regardless of the link's actual sharing settings. Sending a
-// realistic browser User-Agent fixes that class of false-403 outright.
 const BROWSER_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -60,13 +31,6 @@ function isOneDriveHost(...urls: Array<string | undefined>): boolean {
   });
 }
 
-/**
- * OneDrive share links resolve to a web viewer by default, but support a
- * documented `download=1` query parameter that serves the file's raw bytes
- * instead — applied to the *resolved* URL (after 1drv.ms's own redirect),
- * since the shortlink's own query string doesn't carry through a redirect
- * to a different host.
- */
 async function tryOneDriveDirectDownload(resolvedUrl: string): Promise<Response | null> {
   let target: URL;
   try {
@@ -74,7 +38,7 @@ async function tryOneDriveDirectDownload(resolvedUrl: string): Promise<Response 
   } catch {
     return null;
   }
-  if (target.searchParams.get("download") === "1") return null; // already tried this shape
+  if (target.searchParams.get("download") === "1") return null; 
   target.searchParams.set("download", "1");
   try {
     const retryResponse = await fetch(target.toString(), {
@@ -89,13 +53,6 @@ async function tryOneDriveDirectDownload(resolvedUrl: string): Promise<Response 
   }
 }
 
-/**
- * A "Zip download URL" must be a direct, publicly-reachable link to the
- * file's raw bytes — the same kind of link a plain `curl`/browser download
- * would work with, no sign-in required. Share pages from Drive, Dropbox,
- * OneDrive, etc. serve an HTML viewer at that URL instead, which is why
- * this check exists as its own step.
- */
 export async function downloadAndExtractZip(url: string, destDir: string): Promise<void> {
   const trimmedUrl = url.trim();
   if (!/^https?:\/\//i.test(trimmedUrl)) {
@@ -154,11 +111,6 @@ export async function downloadAndExtractZip(url: string, destDir: string): Promi
     );
   }
 
-  // Another common shape of the same underlying mistake: the URL "works"
-  // (200 OK) but what's actually served is an HTML page — a login wall, a
-  // "click here to download" landing page, etc. — rather than the zip
-  // itself. Catching it here, before handing the bytes to AdmZip, lets the
-  // error name the real problem instead of a cryptic zip-parsing failure.
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.toLowerCase().includes("text/html")) {
     const oneDriveHint = isOneDrive
@@ -182,16 +134,6 @@ export async function downloadAndExtractZip(url: string, destDir: string): Promi
   extractZipBuffer(buffer, destDir, { friendlyInvalidZipHint: true });
 }
 
-/**
- * Extracts an in-memory zip buffer into `destDir` (which must not already
- * exist), flattening a single top-level wrapper directory the same way
- * `downloadAndExtractZip` does. Split out so callers that already have the
- * archive's bytes some other way (Task #86's Google Drive import
- * downloads via an authenticated `fetch` with a Bearer token, which
- * `downloadAndExtractZip`'s own plain unauthenticated `fetch(url)` can't
- * do) can reuse the exact same extraction/flattening behavior rather than
- * duplicating it.
- */
 export function extractZipBuffer(
   buffer: Buffer,
   destDir: string,
@@ -209,13 +151,7 @@ export function extractZipBuffer(
     try {
       zip = new AdmZip(tmpZipPath);
     } catch (err) {
-      // options.friendlyInvalidZipHint is set only by downloadAndExtractZip
-      // (the plain "Zip download URL" path), where an invalid archive most
-      // often means the URL didn't actually point at a zip's raw bytes —
-      // the Google Drive Reconnect page report that led here. The Drive
-      // browse-and-import path (importDriveZipFile) downloads bytes
-      // Google itself already confirmed as a zip file, so this specific
-      // hint doesn't apply there.
+
       const hint = options?.friendlyInvalidZipHint
         ? " This usually means the URL isn't a direct link to a zip file's raw bytes — double-check it opens " +
           "a direct file download (not a webpage or a \"click to download\" landing page) when pasted into a " +
@@ -232,18 +168,11 @@ export function extractZipBuffer(
     try {
       fs.unlinkSync(tmpZipPath);
     } catch {
-      // best-effort cleanup only
+
     }
   }
 }
 
-/**
- * If `dir` contains exactly one entry and it's a directory, moves that
- * directory's contents up into `dir` and removes the now-empty wrapper —
- * handles the common "single top-level folder" shape of a GitHub/GitLab
- * source zip so the registered project root is the actual code, not a
- * layer of indirection above it.
- */
 function flattenSingleTopLevelDirectory(dir: string): void {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   if (entries.length !== 1 || !entries[0].isDirectory()) return;

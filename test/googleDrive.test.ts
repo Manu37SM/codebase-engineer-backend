@@ -7,14 +7,6 @@ import type { FastifyInstance } from "fastify";
 import { openDatabase, DB } from "../src/db/index.js";
 import { buildApp } from "../src/app.js";
 
-// Task #86: GET /api/v1/google-drive/zips and POST /api/v1/google-drive/import
-// both need a real Google access token on file, which only exists once a
-// user has completed the Google OAuth flow (Task #82). Every outbound call
-// (token exchange/refresh, userinfo, Drive list/download) is faked here via
-// a routed `global.fetch` stub rather than hitting real Google endpoints —
-// this file focuses on the route wiring: auth requirement, token
-// refresh-then-use, input validation, and project registration.
-
 function extractCookieValue(setCookieHeader: string | string[] | undefined, name: string): string | null {
   if (!setCookieHeader) return null;
   const headers = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
@@ -25,7 +17,6 @@ function extractCookieValue(setCookieHeader: string | string[] | undefined, name
   return null;
 }
 
-/** Builds a fake `fetch` that dispatches on a substring match against the request URL, in order, first match wins. */
 function fakeFetchRouter(routes: Array<{ match: string; respond: () => Response }>) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
@@ -75,13 +66,12 @@ describe("Google Drive zip-file picker (Task #86)", () => {
     }
     global.fetch = originalFetch;
     app.close();
-    // See auth.test.ts's afterEach for why this is required on Windows.
+
     db.close();
     fs.rmSync(tmpDbDir, { recursive: true, force: true });
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
-  /** Signs in via the real Google OAuth callback flow (fake fetch), returning the session cookie. */
   async function signInWithGoogle(): Promise<string> {
     global.fetch = fakeFetchRouter([
       { match: "oauth2.googleapis.com/token", respond: () => jsonResponse({ access_token: "initial-access-token", refresh_token: "stored-refresh-token" }) },
@@ -99,7 +89,7 @@ describe("Google Drive zip-file picker (Task #86)", () => {
   }
 
   it("401s GET /google-drive/zips with no session at all", async () => {
-    await signInWithGoogle(); // now countUsers() > 0, so auth is enforced
+    await signInWithGoogle(); 
     const res = await app.inject({ method: "GET", url: "/api/v1/google-drive/zips" });
     expect(res.statusCode).toBe(401);
   });
@@ -187,8 +177,7 @@ describe("Google Drive zip-file picker (Task #86)", () => {
   });
 
   it("409s when the same Drive file is imported twice (same destination already registered)", async () => {
-    // Registering by-path collisions are handled generically by
-    // getProjectByRootPath; this just exercises it through this route.
+
     const sessionToken = await signInWithGoogle();
     const cookie = `ce_session=${sessionToken}`;
     const zipBuffer = buildTestZip();
@@ -210,9 +199,6 @@ describe("Google Drive zip-file picker (Task #86)", () => {
     });
     expect(first.statusCode).toBe(201);
 
-    // A second import of a *different* fileId can't collide (each import
-    // gets a fresh randomUUID() destination dir), so this test only checks
-    // the 409 path exists by re-registering the same root_path directly.
     const rootPath = first.json().project.root_path ?? first.json().project.rootPath;
     const dupe = await app.inject({
       method: "POST",

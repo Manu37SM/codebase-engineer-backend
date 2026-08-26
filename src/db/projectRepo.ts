@@ -8,35 +8,39 @@ export interface ProjectRecord {
   name: string;
   root_path: string;
   created_at: string;
-  /**
-   * Task #90: whether an approved AI-Mode patch is written straight to
-   * disk ("direct") or packaged as a downloadable zip instead
-   * ("download"). New projects default to "download" (see createProject
-   * below) — this instance runs on a remote server, so "direct" would
-   * write the patch into the *server's* filesystem, not the user's own
-   * machine, which is useless for a self-hosted deployment someone
-   * reaches over the network. "direct" is still fully supported for a
-   * genuinely local install (the app run on your own machine).
-   */
+
   apply_mode: ApplyMode;
+  /**
+   * Owning account's user id (migration 018), or null for a project
+   * created before multi-account auth existed and never claimed by a
+   * user, or on an instance where auth has never been enabled (no
+   * accounts registered — see auth/guard.ts's countUsers()===0 bypass).
+   */
+  user_id: string | null;
 }
 
 export interface RepositorySnapshotRecord {
   id: string;
   project_id: string;
-  languages: string; // JSON
-  frameworks: string; // JSON
-  build_system: string; // JSON
-  package_managers: string; // JSON
+  languages: string; 
+  frameworks: string; 
+  build_system: string; 
+  package_managers: string; 
   git_branch: string | null;
-  working_tree_status: string; // JSON
+  working_tree_status: string; 
   indexed_at: string;
 }
 
-export function createProject(db: DB, id: string, name: string, rootPath: string): ProjectRecord {
+export function createProject(
+  db: DB,
+  id: string,
+  name: string,
+  rootPath: string,
+  ownerUserId: string | null
+): ProjectRecord {
   db.prepare(
-    "INSERT INTO project (id, name, root_path, apply_mode) VALUES (?, ?, ?, 'download')"
-  ).run(id, name, rootPath);
+    "INSERT INTO project (id, name, root_path, apply_mode, user_id) VALUES (?, ?, ?, 'download', ?)"
+  ).run(id, name, rootPath, ownerUserId);
   return getProjectById(db, id)!;
 }
 
@@ -46,36 +50,63 @@ export function getProjectById(db: DB, id: string): ProjectRecord | undefined {
     | undefined;
 }
 
+/**
+ * Ownership-checked project lookup — use this (not the raw `getProjectById`)
+ * at every route that takes a `:id`/`:projectId` param, so one account can
+ * never read, modify, or trigger AI-Mode disk writes/executions against
+ * another account's project. `ownerUserId` should be `request.user?.id`.
+ *
+ * `undefined` means auth is disabled instance-wide (no accounts registered
+ * — see auth/guard.ts's countUsers()===0 bypass): every project is
+ * reachable, matching this product's original single-user/local-first
+ * behavior. Once auth is enabled, a project is only reachable by the
+ * account that owns it — including a project with a null `user_id`
+ * (created before ownership existed and never backfilled/claimed), which
+ * is denied rather than treated as "anyone's", failing closed.
+ *
+ * Returns `undefined` (indistinguishable from "doesn't exist") on a
+ * mismatch, not a 403 — so a route's existing `if (!project) return 404`
+ * check doubles as the ownership check with no other change needed, and a
+ * caller can't use the response to tell "not yours" apart from "doesn't
+ * exist" and go id-guessing.
+ */
+export function getProjectForOwner(
+  db: DB,
+  id: string,
+  ownerUserId: string | undefined
+): ProjectRecord | undefined {
+  const project = getProjectById(db, id);
+  if (!project) return undefined;
+  if (ownerUserId === undefined) return project;
+  if (project.user_id === ownerUserId) return project;
+  return undefined;
+}
+
 export function getProjectByRootPath(db: DB, rootPath: string): ProjectRecord | undefined {
   return db.prepare("SELECT * FROM project WHERE root_path = ?").get(rootPath) as
     | ProjectRecord
     | undefined;
 }
 
-export function listProjects(db: DB): ProjectRecord[] {
-  return db.prepare("SELECT * FROM project ORDER BY created_at DESC").all() as ProjectRecord[];
+/**
+ * `ownerUserId === undefined` (auth disabled instance-wide) lists every
+ * project, matching this product's original single-user behavior.
+ * Otherwise scoped strictly to that account's own projects — a project
+ * with a null `user_id` is excluded here too (see `getProjectForOwner`).
+ */
+export function listProjects(db: DB, ownerUserId: string | undefined): ProjectRecord[] {
+  if (ownerUserId === undefined) {
+    return db.prepare("SELECT * FROM project ORDER BY created_at DESC").all() as ProjectRecord[];
+  }
+  return db
+    .prepare("SELECT * FROM project WHERE user_id = ? ORDER BY created_at DESC")
+    .all(ownerUserId) as ProjectRecord[];
 }
 
-/**
- * Removes a project's own record from Codebase Engineer — findings,
- * snapshots, indexed files, analysis/test runs, patches, generated tests,
- * and audit reports all cascade-delete with it (every one of those tables
- * declares `project_id ... REFERENCES project(id) ON DELETE CASCADE` —
- * see migrations 001/006/008 — and `db/index.ts` turns on
- * `PRAGMA foreign_keys = ON`, so a single DELETE here is enough; SQLite
- * enforces the cascade, not application code).
- *
- * Deliberately does NOT touch anything on disk: the repository at
- * `root_path` is the user's own, on their own machine (Task #94, "remove
- * from workspace") — this only forgets that Codebase Engineer ever
- * registered it. Re-registering the same path afterwards starts fresh,
- * with no memory of the deleted project's findings/history.
- */
 export function deleteProject(db: DB, id: string): void {
   db.prepare("DELETE FROM project WHERE id = ?").run(id);
 }
 
-/** Task #90: sets whether this project's approved patches apply straight to disk or download as a zip instead. */
 export function setProjectApplyMode(db: DB, id: string, applyMode: ApplyMode): void {
   db.prepare("UPDATE project SET apply_mode = ? WHERE id = ?").run(applyMode, id);
 }

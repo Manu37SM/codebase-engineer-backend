@@ -12,7 +12,6 @@ export interface ProviderConfigRecord {
   created_at: string;
 }
 
-/** The shape ever returned by an API response — `api_key` never leaves this module. */
 export interface ProviderConfigPublic {
   id: string;
   name: string;
@@ -39,7 +38,6 @@ export function toPublic(record: ProviderConfigRecord): ProviderConfigPublic {
   };
 }
 
-/** Per docs/SECURITY.md §4's redaction style (first N / last N, rest masked) — applied here to API keys, not just secret findings. */
 export function maskApiKey(key: string): string {
   if (key.length <= 6) return "*".repeat(key.length);
   return `${key.slice(0, 4)}...${key.slice(-2)}`;
@@ -74,9 +72,7 @@ export function createProviderConfig(
 }
 
 export function listProviderConfigs(db: DB): ProviderConfigRecord[] {
-  // Secondary sort on rowid: created_at has only second-level precision, so
-  // two providers created within the same second would otherwise tie and
-  // fall back to SQLite's unspecified order.
+
   return db
     .prepare("SELECT * FROM provider_configuration ORDER BY created_at DESC, rowid DESC")
     .all() as ProviderConfigRecord[];

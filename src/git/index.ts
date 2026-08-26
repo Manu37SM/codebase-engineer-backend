@@ -13,13 +13,6 @@ export interface GitAnalysisOptions {
   churnWindowDays?: number;
 }
 
-/**
- * Composes branch/working-tree detection (Phase 2) with commit history,
- * file churn, and uncommitted-diff analysis (Phase 8). Computed live off
- * the repository's `.git` directory each call — not persisted, matching the
- * Architecture explorer's pattern, since Git state changes on every commit
- * and a stale cached view would be actively misleading.
- */
 export function analyzeGit(root: string, options: GitAnalysisOptions = {}): GitAnalysisResult {
   const commitLimit = options.commitLimit ?? DEFAULT_COMMIT_LIMIT;
   const churnWindowDays = options.churnWindowDays ?? DEFAULT_CHURN_WINDOW_DAYS;

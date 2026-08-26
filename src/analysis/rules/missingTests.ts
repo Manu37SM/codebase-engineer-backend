@@ -3,28 +3,10 @@ import { resolveImports, type ImportableFile } from "../../architecture/resolveI
 import type { AnalysisContext, Finding, Rule } from "../types.js";
 
 const MIN_LOC = 40;
-/** Basenames excluded as usually not independently unit-tested (barrels, types, pure config). */
+
 const SKIP_BASENAMES = new Set(["index", "types", "constants", "config"]);
 const TEST_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".java"];
 
-/**
- * Flags source files with no apparent test coverage. "Apparent" is
- * evidence-based in two ways, combined with OR:
- *
- * 1. Usage-based (primary signal): some test file's imports resolve
- *    (via the same import graph the Architecture explorer uses) to this
- *    file. This handles the extremely common real-world pattern of one
- *    test file exercising several source files by topic
- *    (`discovery.test.ts` covering `git.ts`, `languages.ts`, etc.) — a
- *    naming-convention-only check produces massive false positives on any
- *    codebase organized this way, which was caught by dogfooding this rule
- *    against this project's own `backend/src` before shipping it.
- * 2. Naming-convention (fallback): a `<name>.test.*`/`<name>.spec.*` file,
- *    or Java `<Name>Test.java` etc.
- *
- * Still a heuristic proxy, not real coverage instrumentation — documented
- * as such.
- */
 export const missingTestsRule: Rule = {
   id: "missing-test-file",
   run(ctx: AnalysisContext): Finding[] {
@@ -61,16 +43,6 @@ export const missingTestsRule: Rule = {
   },
 };
 
-/**
- * Returns every file transitively reachable from some test file via the
- * import graph — not just files a test imports directly. A test file very
- * commonly imports one orchestrator (e.g. `discoverRepository`) that itself
- * pulls in several collaborator modules (`git.ts`, `languages.ts`, ...);
- * those collaborators are exercised too, even though no test file imports
- * them by name. A direct-imports-only check still produced widespread false
- * positives on this project's own `backend/src` — this transitive closure
- * is what fixed it.
- */
 function collectFilesReferencedByTests(files: { relativePath: string; language: string | null; isTest: boolean; imports: string[] }[]): Set<string> {
   const importable: ImportableFile[] = files.map((f) => ({
     relativePath: f.relativePath,
@@ -100,7 +72,6 @@ function collectFilesReferencedByTests(files: { relativePath: string; language: 
   return reached;
 }
 
-/** Fixed suffixes `hasCorrespondingTest` used to reconstruct per-candidate (`${baseName}${suffix}`) and compare against every path in the repo — O(files × allPaths). Precomputing the reverse direction once (which *source* base name would this suffix, if stripped, correspond to?) turns the whole naming-convention check into a single O(allPaths) pass plus O(files) O(1) lookups. */
 const NAMING_CONVENTION_SUFFIXES = [
   ...TEST_EXTENSIONS.flatMap((ext) => [`.test${ext}`, `.spec${ext}`]),
   "Test.java",
@@ -108,15 +79,6 @@ const NAMING_CONVENTION_SUFFIXES = [
   "IT.java",
 ];
 
-/**
- * Returns the set of source-file base names that have a corresponding test
- * file present anywhere in the repo by naming convention (e.g. `foo.ts` is
- * "covered" if `foo.test.ts`, `foo.spec.ts`, etc. exists anywhere). Computed
- * once per analysis run, in one pass over every path — the O(N²) alternative
- * (re-scanning all paths per candidate source file, which this replaced) was
- * measured to dominate `missing-test-file`'s runtime on a ~3,700-file corpus
- * (~1.4s of the rule's ~1.4-1.7s total). See `docs/PERFORMANCE.md`.
- */
 function collectBaseNamesWithCorrespondingTest(allPaths: Set<string>): Set<string> {
   const baseNames = new Set<string>();
   for (const candidatePath of allPaths) {

@@ -130,20 +130,14 @@ describe("projects API", () => {
     const deleteRes = await app.inject({ method: "DELETE", url: `/api/v1/projects/${project.id}` });
     expect(deleteRes.statusCode).toBe(204);
 
-    // The project itself is gone.
     const getRes = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}` });
     expect(getRes.statusCode).toBe(404);
 
-    // ...and it no longer shows up in the list.
     const listRes = await app.inject({ method: "GET", url: "/api/v1/projects" });
     expect(listRes.json().projects.find((p: { id: string }) => p.id === project.id)).toBeUndefined();
 
-    // The real repository on disk is completely untouched — this only
-    // forgets Codebase Engineer's own record of it.
     expect(fs.existsSync(path.join(repoRoot, "package.json"))).toBe(true);
 
-    // Re-registering the same path works again, starting fresh (proves
-    // the UNIQUE root_path row was actually removed, not just hidden).
     const reRegisterRes = await app.inject({
       method: "POST",
       url: "/api/v1/projects",
@@ -186,7 +180,6 @@ describe("projects API", () => {
     expect(subProject.name).toBe("backend-service");
     expect(subProject.root_path).toBe(path.join(repoRoot, "backend-service"));
 
-    // Parent project is untouched — both now coexist in the workspace.
     const listRes = await app.inject({ method: "GET", url: "/api/v1/projects" });
     const ids = listRes.json().projects.map((p: { id: string }) => p.id);
     expect(ids).toContain(project.id);
@@ -255,7 +248,6 @@ describe("projects API", () => {
       expect(project.name).toBe("imported-via-git");
       expect(fs.existsSync(path.join(project.root_path, "README.md"))).toBe(true);
 
-      // Registered like any other project — discover/index work on it.
       const discoverRes = await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/discover` });
       expect(discoverRes.statusCode).toBe(200);
     } finally {
@@ -295,7 +287,7 @@ describe("projects API", () => {
     });
     expect(indexRes.statusCode).toBe(200);
     const indexBody = indexRes.json();
-    expect(indexBody.totalFiles).toBe(2); // package.json + src/main.ts
+    expect(indexBody.totalFiles).toBe(2); 
 
     const listRes = await app.inject({
       method: "GET",
@@ -308,7 +300,6 @@ describe("projects API", () => {
     expect(mainFile).toBeTruthy();
     expect(mainFile.language).toBe("TypeScript");
 
-    // Remove a file on disk and reindex — the stale row must be gone, not accumulated.
     const fs = await import("node:fs");
     const path = await import("node:path");
     fs.rmSync(path.join(repoRoot, "src/main.ts"));
@@ -389,10 +380,7 @@ describe("projects API", () => {
       url: `/api/v1/projects/${project.id}/architecture?depth=1`,
     });
     const body1 = depth1.json();
-    // At depth 1, main.ts and lib/util.ts both collapse into module "src" —
-    // the edge between them becomes intra-module and must disappear.
-    // (root) also appears because the fixture's package.json lives at the
-    // repo root, outside any directory.
+
     expect(body1.nodes.map((n: { id: string }) => n.id).sort()).toEqual(["(root)", "src"]);
     expect(body1.edges).toEqual([]);
   });
@@ -436,10 +424,9 @@ describe("projects API", () => {
     });
     const listBody = listRes.json();
     expect(listBody.total).toBeGreaterThan(0);
-    expect(listBody.findings[0].severity).toBe("high"); // secret finding sorts first (highest severity present)
+    expect(listBody.findings[0].severity).toBe("high"); 
     expect(listBody.latestRun.status).toBe("completed");
 
-    // Remove the offending file and rerun — the stale finding must be gone.
     const fs = await import("node:fs");
     const path = await import("node:path");
     fs.rmSync(path.join(repoRoot, "src/config.ts"));
@@ -474,14 +461,11 @@ describe("projects API", () => {
     const { runs } = historyRes.json();
     expect(runs.length).toBe(2);
 
-    // Oldest first.
     expect(new Date(runs[0].started_at).getTime()).toBeLessThanOrEqual(new Date(runs[1].started_at).getTime());
 
-    // First run had the hardcoded secret -> at least one high-severity finding, a real (non-null) count.
     expect(runs[0].high_count).toBeGreaterThan(0);
     expect(typeof runs[0].critical_count).toBe("number");
 
-    // Second run (secret removed) has a real, honestly-zero high count — not null, since the run genuinely completed and counted zero.
     expect(runs[1].high_count).toBe(0);
   });
 
@@ -654,7 +638,6 @@ describe("projects API", () => {
     expect(res.statusCode).toBe(403);
     expect(res.json().error).toMatch(/Pro-tier feature/);
 
-    // Refused, so the run must still be there.
     const listRes = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/tests` });
     expect(listRes.json().runs).toHaveLength(1);
   });
@@ -668,7 +651,7 @@ describe("projects API", () => {
   });
 
   it("reports supported:false and persists a reason for an unsupported project", async () => {
-    // repoRoot's default package.json (from beforeEach) has no test script.
+
     const createRes = await app.inject({
       method: "POST",
       url: "/api/v1/projects",
@@ -736,7 +719,7 @@ describe("projects API", () => {
   });
 
   it("returns dependency analysis for a registered npm project", async () => {
-    // repoRoot's default package.json (from beforeEach) has a "vite" dependency.
+
     const createRes = await app.inject({
       method: "POST",
       url: "/api/v1/projects",
@@ -794,8 +777,7 @@ describe("projects API", () => {
     expect(report.dependencies.ecosystem).toBe("npm");
     expect(report.git.isGitRepository).toBe(true);
     expect(report.git.branch).toBeTruthy();
-    // Test runner was never invoked in this test — an audit report must
-    // say so honestly rather than fabricate a run.
+
     expect(report.latestTestRun).toBeNull();
   });
 
@@ -885,8 +867,7 @@ describe("projects API", () => {
     const bundle = contextRes.json();
     expect(bundle.targetId).toBe(finding.id);
     expect(bundle.selected.some((s: { path: string }) => s.path === "src/config.ts")).toBe(true);
-    // The secret must never appear anywhere in the response — the context
-    // layer's own redaction, independent of the finding evidence's own redaction.
+
     expect(contextRes.body).not.toContain("ABCDEFGHIJKLMNOPQRSTUV");
   });
 
@@ -1380,12 +1361,7 @@ describe("projects API", () => {
       payload: { name: "patch-fixture-" + randomUUID(), rootPath: repoRoot },
     });
     const { project } = createRes.json();
-    // New projects default to apply_mode "download" (bugfix, Aug 2026 —
-    // see db/projectRepo.ts's createProject doc comment): this helper's
-    // own callers mostly exercise the "direct" write path, so set it
-    // explicitly here rather than relying on a DB default. The one test
-    // that specifically covers "download" mode (Task #90) overrides this
-    // back to "download" itself afterward.
+
     await app.inject({ method: "PATCH", url: `/api/v1/projects/${project.id}/settings`, payload: { applyMode: "direct" } });
     await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/discover` });
     await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/index` });
@@ -1436,7 +1412,6 @@ describe("projects API", () => {
     expect(patch.diff_text).toBeNull();
     expect(patch.description).toBe("Hardcoded secret.");
 
-    // Generation must be refused before approval — the server-enforced gate, not a UI convention.
     const { url: genUrl, close: closeGen } = await startServer((req, res) => {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ model: "gpt-test", choices: [{ message: { content: PATCH_DIFF }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }));
@@ -1473,12 +1448,6 @@ describe("projects API", () => {
       expect(body.patch.status).toBe("proposed");
       expect(body.patch.diff_text).toBe(PATCH_DIFF);
       expect(body.usedFixPlan).toBe(true);
-      // Note: unlike /explain, /root-cause, and /fix-plan, the diff text
-      // itself is the model's own generated output, not context assembled
-      // from the codebase — so it is stored verbatim (including a "-" line
-      // quoting the secret being removed, exactly as a real diff would).
-      // Redaction guarantees apply to what's sent TO the provider (the
-      // context bundle), not to what the provider sends back.
 
       const fetchRes = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/patches/${patch.id}` });
       expect(fetchRes.json().patch.diff_text).toBe(PATCH_DIFF);
@@ -1539,7 +1508,6 @@ describe("projects API", () => {
     await closeGen();
     expect(generateRes.json().patch.status).toBe("proposed");
 
-    // The second gate refuses to let /apply run before this diff is itself reviewed and approved.
     const prematureApplyRes = await app.inject({
       method: "POST",
       url: `/api/v1/projects/${project.id}/patches/${patch.id}/apply`,
@@ -1564,8 +1532,6 @@ describe("projects API", () => {
     expect(appliedPatch.status).toBe("applied");
     expect(appliedPatch.apply_error).toBeNull();
 
-    // The real file on disk actually changed — this is the first route in the
-    // product that writes to a file, so this is the assertion that matters.
     const fileContent = fs.readFileSync(path.join(repoRoot, "src/config.ts"), "utf-8");
     expect(fileContent).toContain("process.env.API_KEY");
     expect(fileContent).not.toContain("sk_live_ABCDEFGHIJKLMNOPQRSTUV");
@@ -1602,11 +1568,9 @@ describe("projects API", () => {
     expect(zipRes.headers["content-type"]).toBe("application/zip");
     expect(zipRes.headers["content-disposition"]).toContain(`patch-${patch.id}.zip`);
 
-    // The real file on disk is completely untouched — this route never writes.
     const fileContent = fs.readFileSync(path.join(repoRoot, "src/config.ts"), "utf-8");
     expect(fileContent).toContain("sk_live_ABCDEFGHIJKLMNOPQRSTUV");
 
-    // The zip really contains the patched content, not the original.
     const AdmZip = (await import("adm-zip")).default;
     const zip = new AdmZip(zipRes.rawPayload);
     const entry = zip.getEntry("src/config.ts");
@@ -1655,7 +1619,6 @@ describe("projects API", () => {
     expect(applyRes.statusCode).toBe(400);
     expect(applyRes.json().error).toMatch(/download/);
 
-    // Nothing was written, and the patch is still approved_for_apply — switching back to direct mode lets it retry.
     const fileContent = fs.readFileSync(path.join(repoRoot, "src/config.ts"), "utf-8");
     expect(fileContent).toContain("sk_live_ABCDEFGHIJKLMNOPQRSTUV");
     const patchAfter = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/patches/${patch.id}` });
@@ -1718,7 +1681,6 @@ describe("projects API", () => {
     expect(applyRes.statusCode).toBe(400);
     expect(applyRes.json().error).toMatch(/not "approved_for_apply"/);
 
-    // Nothing was written — the file is untouched.
     const fileContent = fs.readFileSync(path.join(repoRoot, "src/config.ts"), "utf-8");
     expect(fileContent).toContain("sk_live_ABCDEFGHIJKLMNOPQRSTUV");
   });
@@ -1760,7 +1722,6 @@ describe("projects API", () => {
     expect(rejectApplyRes.statusCode).toBe(200);
     expect(rejectApplyRes.json().patch.status).toBe("rejected");
 
-    // Still nothing written — rejecting from approved_for_apply never touches the file.
     const fileContent = fs.readFileSync(path.join(repoRoot, "src/config.ts"), "utf-8");
     expect(fileContent).toContain("sk_live_ABCDEFGHIJKLMNOPQRSTUV");
   });
@@ -1789,7 +1750,6 @@ describe("projects API", () => {
     await closeGen();
     await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/patches/${patch.id}/approve-apply` });
 
-    // The file drifted since the diff was generated — the real dry run must catch this.
     writeFile(repoRoot, "src/config.ts", "totally different content now\n");
 
     const applyRes = await app.inject({
@@ -1801,9 +1761,8 @@ describe("projects API", () => {
     expect(failedPatch.status).toBe("failed");
     expect(failedPatch.apply_error).toBeTruthy();
     const fileContent = fs.readFileSync(path.join(repoRoot, "src/config.ts"), "utf-8");
-    expect(fileContent).toBe("totally different content now\n"); // untouched by the failed apply
+    expect(fileContent).toBe("totally different content now\n"); 
 
-    // Retry is allowed directly from 'failed' without re-approving.
     writeFile(repoRoot, "src/config.ts", `const apiKey = "sk_live_ABCDEFGHIJKLMNOPQRSTUV";\nexport const x = 1;\n`);
     const retryRes = await app.inject({
       method: "POST",
@@ -1857,8 +1816,6 @@ describe("projects API", () => {
     });
     expect(generateRes.statusCode).toBe(404);
   });
-
-  // --- Phase 21: AI self-review ---------------------------------------------
 
   const GOOD_SELF_REVIEW_RESPONSE =
     "CORRECTNESS: pass - the diff reads the key from an environment variable instead of hardcoding it.\n" +
@@ -1945,7 +1902,6 @@ describe("projects API", () => {
     expect(body.review.missingTests.status).toBe("concern");
     expect(body.contextBundle.selected.length).toBeGreaterThan(0);
 
-    // Self-review is advisory only — the patch's own status is untouched.
     const patchAfter = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/patches/${patch.id}` });
     expect(patchAfter.json().patch.status).toBe("proposed");
 
@@ -1958,10 +1914,6 @@ describe("projects API", () => {
   it("refuses self-review without an enabled AI provider", async () => {
     const { project, patch } = await setUpGeneratedPatch();
 
-    // setUpGeneratedPatch left a provider enabled (used for generation) —
-    // disable it so this test genuinely exercises the "no enabled
-    // provider" 400 path rather than a real network failure against the
-    // now-closed generation server.
     const providersRes = await app.inject({ method: "GET", url: "/api/v1/ai/providers" });
     for (const p of providersRes.json().providers) {
       await app.inject({ method: "PATCH", url: `/api/v1/ai/providers/${p.id}`, payload: { enabled: false } });
@@ -1986,8 +1938,6 @@ describe("projects API", () => {
     const postRes = await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/patches/${unknownId}/self-review` });
     expect(postRes.statusCode).toBe(404);
   });
-
-  // --- Phase 19: AI test generation ----------------------------------------
 
   const GOOD_TEST_RESPONSE =
     "TARGET_PATH:\nsrc/config.test.ts\n\nTEST_CODE:\nimport { describe, it, expect } from \"vitest\";\n\ndescribe(\"config\", () => {\n  it(\"does not hardcode the secret\", () => {\n    expect(true).toBe(true);\n  });\n});\n";
@@ -2025,7 +1975,6 @@ describe("projects API", () => {
     expect(generatedTest.status).toBe("pending_approval");
     expect(generatedTest.test_code).toBeNull();
 
-    // Generation must be refused before approval.
     const prematureGenerateRes = await app.inject({
       method: "POST",
       url: `/api/v1/projects/${project.id}/generated-tests/${generatedTest.id}/generate`,
@@ -2057,7 +2006,6 @@ describe("projects API", () => {
     expect(proposed.target_path).toBe("src/config.test.ts");
     expect(proposed.test_code).toContain("describe(");
 
-    // Writing must be refused before the diff-review-equivalent second gate.
     const prematureWriteRes = await app.inject({
       method: "POST",
       url: `/api/v1/projects/${project.id}/generated-tests/${generatedTest.id}/write-and-run`,
@@ -2083,11 +2031,9 @@ describe("projects API", () => {
     expect(writeBody.supported).toBe(true);
     expect(writeBody.testRun.status).toBe("passed");
 
-    // The real file actually exists on disk with the AI-generated content.
     const fileContent = fs.readFileSync(path.join(repoRoot, "src/config.test.ts"), "utf-8");
     expect(fileContent).toContain('describe("config"');
 
-    // The real test_run row is independently fetchable via the existing Tests page API.
     const testRunRes = await app.inject({ method: "GET", url: `/api/v1/projects/${project.id}/tests/${writeBody.testRun.id}` });
     expect(testRunRes.statusCode).toBe(200);
     expect(testRunRes.json().run.stdout_ref).toContain("1 passed");
@@ -2103,7 +2049,6 @@ describe("projects API", () => {
     const generatedTest = createRes.json().generatedTest;
     await app.inject({ method: "POST", url: `/api/v1/projects/${project.id}/generated-tests/${generatedTest.id}/approve` });
 
-    // The model proposes a path that already exists (src/config.ts, not a new test file).
     const conflictingResponse =
       "TARGET_PATH:\nsrc/config.ts\n\nTEST_CODE:\nimport { describe, it, expect } from \"vitest\";\n\ndescribe(\"whoops\", () => {\n  it(\"conflicts\", () => {\n    expect(true).toBe(true);\n  });\n});\n";
     const { url: genUrl, close: closeGen } = await startServer((req, res) => {
@@ -2129,7 +2074,6 @@ describe("projects API", () => {
     expect(writeRes.statusCode).toBe(400);
     expect(writeRes.json().error).toMatch(/already exists/);
 
-    // Untouched — the conflict check ran before any write.
     const afterContent = fs.readFileSync(path.join(repoRoot, "src/config.ts"), "utf-8");
     expect(afterContent).toBe(originalContent);
   });
@@ -2206,9 +2150,7 @@ describe("projects API", () => {
   });
 
   async function setUpFailedTestRun(): Promise<{ project: any; run: any }> {
-    // A real "test" script that exits non-zero — runTests() (Phase 9) is a
-    // real subprocess execution, not a mock, so the resulting test_run row
-    // is a genuine 'failed' status this diagnose route can act on.
+
     writeFile(
       repoRoot,
       "package.json",

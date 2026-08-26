@@ -14,7 +14,7 @@ describe("walkRepository — nested .gitignore", () => {
     writeFile(root, "packages/app/.gitignore", "*.local.ts\n");
     writeFile(root, "packages/app/src/keep.ts", "export const a = 1;\n");
     writeFile(root, "packages/app/src/secret.local.ts", "export const b = 2;\n");
-    // A sibling package without that pattern should be unaffected.
+
     writeFile(root, "packages/other/secret.local.ts", "export const c = 3;\n");
 
     const files = walkRepository({ root }).map((f) => f.relPath).sort();

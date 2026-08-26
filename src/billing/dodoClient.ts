@@ -1,20 +1,4 @@
-/**
- * Real HTTP client for Dodo Payments' Checkout Sessions API
- * (https://docs.dodopayments.com/api-reference/checkout-sessions/create),
- * following the same shape `razorpayClient.ts` used before it (see git
- * history): a real `fetch`-based call, an injectable base URL so tests
- * exercise the real request/response handling against a real local HTTP
- * double instead of live Dodo Payments (this project has no live Dodo
- * account/credentials in this development sandbox), and errors
- * classified the same way (auth/rate-limit/unreachable) so callers don't
- * need a separate error-handling shape per external API this product
- * talks to.
- *
- * Unlike Razorpay's Orders API (create an order, hand it to a client-side
- * widget), Dodo's Checkout Sessions API returns a hosted `checkout_url` —
- * the browser is simply redirected there and back (`return_url`), no
- * client-side payment widget/script needed at all.
- */
+
 export class DodoError extends Error {
   constructor(
     message: string,
@@ -70,13 +54,7 @@ export function createDodoClient(config: DodoClientConfig) {
   }
 
   return {
-    /**
-     * Creates a real Dodo Payments checkout session — a single API call
-     * that returns a hosted `checkout_url` to redirect the browser to.
-     * Never charges anything itself; a session nobody completes just
-     * expires unused, same non-side-effecting-until-paid shape the
-     * Razorpay order flow had.
-     */
+
     async createCheckoutSession(input: CreateCheckoutInput): Promise<DodoCheckoutSession> {
       const res = await doFetch("/checkouts", {
         method: "POST",

@@ -21,11 +21,6 @@ export interface DiscoveryResult {
   discoveredAt: string;
 }
 
-/**
- * Runs full repository discovery against an already-validated project root.
- * Composes the individual detectors (Phase 2 scope: discovery only — full
- * indexing with per-file symbol/import extraction is Phase 3).
- */
 export function discoverRepository(root: string): DiscoveryResult {
   assertValidProjectRoot(root);
 

@@ -96,21 +96,20 @@ describe("getFileChurn", () => {
     writeFile(root, "hot.ts", "v3\n");
     gitCommitAll(root, "touch hot a third time");
 
-    const churn = getFileChurn(root, 3650); // wide window to include all fixture commits
+    const churn = getFileChurn(root, 3650); 
 
     const hot = churn.find((c) => c.path === "hot.ts");
     const cold = churn.find((c) => c.path === "cold.ts");
     expect(hot?.commitCount).toBe(3);
     expect(cold?.commitCount).toBe(1);
-    expect(churn[0].path).toBe("hot.ts"); // sorted descending
+    expect(churn[0].path).toBe("hot.ts"); 
   });
 
   it("excludes commits older than the window", () => {
     root = makeTempRepo();
     initGit(root);
     writeFile(root, "old.ts", "v1\n");
-    // Backdate the commit two years into the past so a 90-day window
-    // reliably excludes it regardless of exact test-run timing.
+
     const twoYearsAgo = new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000).toISOString();
     execFileSync("git", ["add", "-A"], { cwd: root });
     execFileSync("git", ["commit", "-q", "-m", "old commit"], {
@@ -143,9 +142,8 @@ describe("getUncommittedChanges", () => {
     writeFile(root, "a.ts", "line1\nline2\nline3\n");
     gitCommitAll(root, "initial");
 
-    // Unstaged modification.
     writeFile(root, "a.ts", "line1\nCHANGED\nline3\nline4\n");
-    // New file, staged.
+
     writeFile(root, "b.ts", "new file\n");
     execFileSync("git", ["add", "b.ts"], { cwd: root });
 
@@ -155,8 +153,8 @@ describe("getUncommittedChanges", () => {
     expect(diff!.filesChanged).toBe(2);
     const aStat = diff!.files.find((f) => f.path === "a.ts");
     const bStat = diff!.files.find((f) => f.path === "b.ts");
-    expect(aStat?.insertions).toBe(2); // CHANGED + line4
-    expect(aStat?.deletions).toBe(1); // original line2
+    expect(aStat?.insertions).toBe(2); 
+    expect(aStat?.deletions).toBe(1); 
     expect(bStat?.insertions).toBe(1);
     expect(bStat?.deletions).toBe(0);
   });

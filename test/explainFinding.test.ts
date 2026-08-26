@@ -47,7 +47,7 @@ describe("explainFinding", () => {
     writeFile(repoRoot, "src/a.ts", 'const apiKey = "sk-verysecretvalue1234";\nexport const x = 1;\n');
 
     const projectId = randomUUID();
-    createProject(db, projectId, "test-project", repoRoot);
+    createProject(db, projectId, "test-project", repoRoot, null);
 
     const findingId = randomUUID();
     replaceProjectFindings(
@@ -100,9 +100,6 @@ describe("explainFinding", () => {
       expect(result.explanation).toBe("This matters because a secret is hardcoded.");
       expect(result.usage).toEqual({ promptTokens: 40, completionTokens: 10 });
 
-      // The prompt sent to the provider must never contain the raw secret —
-      // it must have gone through the same redaction the context selector
-      // already applies before anything is counted or returned.
       const sentText = JSON.stringify(receivedBody);
       expect(sentText).not.toContain("verysecretvalue1234");
       expect(sentText).toContain("hardcoded-secret");
@@ -123,7 +120,7 @@ describe("explainFinding", () => {
     writeFile(repoRoot, "src/a.ts", "export const x = 1;\n");
 
     const projectId = randomUUID();
-    createProject(db, projectId, "test-project", repoRoot);
+    createProject(db, projectId, "test-project", repoRoot, null);
 
     const findingId = randomUUID();
     replaceProjectFindings(

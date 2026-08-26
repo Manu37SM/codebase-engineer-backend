@@ -1,12 +1,6 @@
 import { execFileSync } from "node:child_process";
 import type { DiffStatSummary, FileDiffStat } from "./types.js";
 
-/**
- * Summarizes uncommitted changes (staged + unstaged, relative to HEAD) via
- * `git diff HEAD --numstat`. Returns null when there's no HEAD to diff
- * against (a brand-new repo with zero commits) rather than fabricating an
- * empty-but-misleading summary.
- */
 export function getUncommittedChanges(root: string): DiffStatSummary | null {
   const output = safeGit(root, ["diff", "HEAD", "--numstat"]);
   if (output === null) return null;

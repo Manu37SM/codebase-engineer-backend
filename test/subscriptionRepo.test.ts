@@ -31,7 +31,6 @@ describe("subscriptionRepo", () => {
     expect(sub.tier).toBe("free");
     expect(sub.status).toBe("active");
 
-    // Calling it again returns the same row, not a second one.
     const again = getOrCreateSubscription(db);
     expect(again.id).toBe(sub.id);
     const count = db.prepare("SELECT COUNT(*) as c FROM subscription").get() as { c: number };

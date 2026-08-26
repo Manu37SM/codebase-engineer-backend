@@ -26,7 +26,6 @@ describe("database migrations", () => {
     expect(count1).toBeGreaterThan(0);
     db1.close();
 
-    // Re-opening must not re-apply or fail
     const db2 = openDatabase(dbPath);
     const count2 = (
       db2.prepare("SELECT COUNT(*) as count FROM schema_migrations").get() as {

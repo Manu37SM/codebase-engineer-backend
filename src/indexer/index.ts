@@ -25,17 +25,6 @@ export interface IndexResult {
   indexedAt: string;
 }
 
-/**
- * Full repository index: one IndexedFile per non-ignored file, with
- * language, approximate LOC, size, test/generated classification, content
- * hash, and (for JS/TS/Java) extracted import specifiers.
- *
- * Known gap (documented, not fabricated): symbol-level extraction
- * (classes/functions/exported members) is not implemented in Phase 3 — it
- * requires a real parser (Tree-sitter) per docs/ARCHITECTURE.md §6 and is
- * tracked as future work in docs/FEATURE.md. `imports` is regex-based and
- * may under-report unusual syntax.
- */
 export function indexRepository(root: string): IndexResult {
   assertValidProjectRoot(root);
 

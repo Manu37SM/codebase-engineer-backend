@@ -11,24 +11,12 @@ const PATTERNS: CorsPattern[] = [
     label: "Access-Control-Allow-Origin set to '*'",
   },
   {
-    // Express `cors` middleware and equivalents in other frameworks pass an
-    // options object with an `origin` field set to a wildcard or `true`.
-    // The comment here is deliberately paraphrased rather than showing the
-    // literal option syntax — dogfooding this rule against its own source
-    // found that spelling the pattern out literally in a comment made this
-    // file match its own regex.
+
     pattern: /origin\s*:\s*(['"]\*['"]|true)\s*[,}]/,
     label: "CORS origin set to allow any origin ('*' or true)",
   },
 ];
 
-/**
- * Flags a wildcard/allow-any-origin CORS configuration found directly in
- * source. A pattern match in test fixtures or comments is possible (this is
- * regex-based, not a real config-schema evaluator — a documented
- * limitation, same class as the other analysis rules), so this is a
- * heuristic proxy for "worth a human looking at it", not a certainty.
- */
 export const permissiveCorsRule: Rule = {
   id: "permissive-cors",
   run(ctx: AnalysisContext): Finding[] {
@@ -55,7 +43,7 @@ export const permissiveCorsRule: Rule = {
             recommendation:
               "Restrict Access-Control-Allow-Origin to a specific allowlist of trusted origins instead of '*' or unconditionally true.",
           });
-          break; // one finding per line is enough even if both patterns match
+          break; 
         }
       });
     }

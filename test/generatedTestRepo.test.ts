@@ -28,7 +28,7 @@ describe("generatedTestRepo", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ce-generatedtest-repo-test-"));
     db = openDatabase(path.join(tmpDir, "test.db"));
     projectId = randomUUID();
-    createProject(db, projectId, "test-project", "/tmp/test-project-" + randomUUID());
+    createProject(db, projectId, "test-project", "/tmp/test-project-" + randomUUID(), null);
     findingId = randomUUID();
     replaceProjectFindings(
       db,

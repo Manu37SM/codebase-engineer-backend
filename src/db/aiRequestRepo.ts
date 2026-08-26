@@ -1,23 +1,12 @@
 import type { DB } from "./index.js";
 
-/**
- * Persistence for the `ai_request`/`ai_response` accounting tables (Phase 0
- * scaffold, extended by migration 005 for Phase 14). Every real call to an
- * `AIProvider.complete()` from a user-facing workflow — starting with
- * finding explanation — writes one request row up front and one response
- * row after the call resolves (success or failure), per docs/AI_MODE.md §7's
- * "tracked per AI call" accounting requirement. This module has no opinion
- * about *why* a call was made; workflow code (e.g. `ai/workflows/explainFinding.ts`)
- * decides that.
- */
-
 export interface AIRequestRecord {
   id: string;
   project_id: string | null;
   finding_id: string | null;
-  /** Phase 20's TestRun-target equivalent of `finding_id` — see migration 009. Exactly one of the two is set for any real workflow call so far; both may be null for pre-Phase-14 accounting rows. */
+
   test_run_id: string | null;
-  /** Phase 21's Patch-target equivalent — see migration 010. Set alongside `finding_id` for self-review (a patch always has one), never alongside `test_run_id`. */
+
   patch_id: string | null;
   provider: string;
   model: string;
@@ -39,9 +28,9 @@ export interface AIResponseRecord {
 export interface CreateAIRequestInput {
   projectId: string | null;
   findingId: string | null;
-  /** Phase 20 addition — omit or pass `null` for Finding-target workflows, exactly as `findingId` is `null` for this new TestRun-target one. */
+
   testRunId?: string | null;
-  /** Phase 21 addition — set alongside `findingId` for a patch self-review, since a patch always belongs to a finding but self-review's accounting needs to be scoped to the specific patch/diff reviewed. */
+
   patchId?: string | null;
   provider: string;
   model: string;
@@ -91,12 +80,6 @@ export function createAIResponse(db: DB, id: string, input: CreateAIResponseInpu
   return db.prepare("SELECT * FROM ai_response WHERE id = ?").get(id) as AIResponseRecord;
 }
 
-/**
- * The most recent successful explanation on file for a finding, if any —
- * lets the UI show a previously-generated explanation without spending
- * tokens on a repeat call. Joins through `ai_request` since that's where
- * `finding_id` and `operation_type` live.
- */
 export function getLatestSuccessfulResponse(
   db: DB,
   findingId: string,
@@ -116,12 +99,6 @@ export function getLatestSuccessfulResponse(
     | undefined;
 }
 
-/**
- * Phase 20's TestRun-target equivalent of `getLatestSuccessfulResponse` —
- * same "don't re-spend tokens on a repeat call" purpose, keyed by
- * `test_run_id` instead of `finding_id` since a failure diagnosis is
- * about a `TestRun`, not a `Finding`.
- */
 export function getLatestSuccessfulResponseForTestRun(
   db: DB,
   testRunId: string,
@@ -141,13 +118,6 @@ export function getLatestSuccessfulResponseForTestRun(
     | undefined;
 }
 
-/**
- * Phase 21's Patch-target equivalent of `getLatestSuccessfulResponse` —
- * keyed by `patch_id` rather than `finding_id` so a self-review result
- * stays tied to the exact diff it reviewed, not just "the finding" (a
- * finding can have several patches, and a patch can be regenerated more
- * than once).
- */
 export function getLatestSuccessfulResponseForPatch(
   db: DB,
   patchId: string,

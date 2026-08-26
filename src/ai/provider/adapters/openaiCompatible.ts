@@ -9,22 +9,15 @@ import {
 import { estimateTokens as estimateTokensShared } from "../../tokenEstimate.js";
 
 export interface OpenAICompatibleConfig {
-  /** e.g. "https://api.openai.com/v1", or a local server's OpenAI-compatible base URL. */
+
   baseUrl: string;
-  /** Optional — many local servers (Ollama's OpenAI-compat endpoint, LM Studio) don't require one. */
+
   apiKey?: string | null;
   model: string;
-  /** Milliseconds. Defaults to 30s — this is a live network call, not a background job. */
+
   timeoutMs?: number;
 }
 
-/**
- * Talks to any server implementing the OpenAI Chat Completions API shape
- * (`GET {baseUrl}/models`, `POST {baseUrl}/chat/completions`) — this covers
- * OpenAI itself and the many local/self-hosted servers (Ollama, LM Studio,
- * vLLM, etc.) that expose an OpenAI-compatible surface, without needing a
- * separate adapter per vendor.
- */
 export function createOpenAICompatibleProvider(config: OpenAICompatibleConfig): AIProvider {
   const baseUrl = config.baseUrl.replace(/\/+$/, "");
   const timeoutMs = config.timeoutMs ?? 30_000;
@@ -115,8 +108,6 @@ export function createOpenAICompatibleProvider(config: OpenAICompatibleConfig): 
       };
     },
 
-    // See ai/tokenEstimate.ts for why this is a documented approximation,
-    // not a real per-model tokenizer.
     estimateTokens(text: string): number {
       return estimateTokensShared(text);
     },

@@ -14,12 +14,6 @@ export interface FileRecord {
   imports: string | null;
 }
 
-/**
- * Replaces all `file` rows for a project with a fresh index result, in a
- * single transaction. A reindex is a full replace, not a diff/merge — this
- * keeps the index always consistent with the last successful scan rather
- * than accumulating stale rows for files that were deleted or moved.
- */
 export function replaceProjectFiles(
   db: DB,
   projectId: string,
@@ -94,13 +88,6 @@ export function listProjectFiles(
   return { files, total };
 }
 
-/**
- * Returns every indexed file for a project, unpaginated. Used by the
- * architecture explorer, which needs the full import graph to aggregate —
- * not a page of it. Documented tradeoff: on a very large repository this
- * loads every row into memory at once; revisit if that becomes a real
- * problem (see docs/FEATURE.md performance notes).
- */
 export function listAllProjectFiles(db: DB, projectId: string): FileRecord[] {
   return db
     .prepare("SELECT * FROM file WHERE project_id = ? ORDER BY relative_path")

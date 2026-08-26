@@ -1,13 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { DB } from "./index.js";
 
-/**
- * Persistence for local accounts, sessions, and linked OAuth identities
- * (Task #80/#82/#83). See migration `014_auth.sql` for the full schema
- * rationale — in particular why `countUsers() === 0` is the app-wide
- * signal for "auth not yet turned on" (backend/src/auth/guard.ts).
- */
-
 export interface UserRecord {
   id: string;
   email: string;
@@ -41,18 +34,12 @@ export function getUserByEmail(db: DB, email: string): UserRecord | undefined {
     | undefined;
 }
 
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days.
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; 
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-/**
- * Creates a session and returns the RAW token — the only place the raw
- * token ever exists; only its SHA-256 hash is persisted (see migration
- * `014_auth.sql`'s comment on `session.token_hash`). The caller is
- * responsible for putting this raw token in the session cookie.
- */
 export function createSession(db: DB, id: string, userId: string): string {
   const token = randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
@@ -70,7 +57,6 @@ export interface SessionRecord {
   expires_at: string;
 }
 
-/** Looks up a session by its RAW token (hashes it first) — returns undefined if not found or expired. */
 export function getSessionByToken(db: DB, token: string): SessionRecord | undefined {
   const row = db
     .prepare("SELECT * FROM session WHERE token_hash = ?")
@@ -91,7 +77,6 @@ export function deleteSession(db: DB, id: string): void {
   db.prepare("DELETE FROM session WHERE id = ?").run(id);
 }
 
-/** Housekeeping — not called automatically on a schedule (this is a local single-process app, not a server farm); safe to call opportunistically (e.g. on login). */
 export function deleteExpiredSessions(db: DB): void {
   db.prepare("DELETE FROM session WHERE expires_at < datetime('now')").run();
 }
@@ -154,7 +139,6 @@ export function createOauthIdentity(
   return getOauthIdentityForUser(db, input.userId, input.provider)!;
 }
 
-/** Updates the stored (encrypted) tokens for an already-linked identity — e.g. after a token refresh. */
 export function updateOauthTokens(
   db: DB,
   id: string,

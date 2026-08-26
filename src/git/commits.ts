@@ -5,13 +5,6 @@ const RECORD_SEP = "\x1e";
 const FIELD_SEP = "\x1f";
 const PRETTY_FORMAT = `%H${FIELD_SEP}%h${FIELD_SEP}%an${FIELD_SEP}%ae${FIELD_SEP}%ad${FIELD_SEP}%s${RECORD_SEP}`;
 
-/**
- * Returns the most recent commits on HEAD, newest first. Uses ASCII
- * unit/record separators (never present in normal commit content) rather
- * than a printable delimiter like "|", so a commit subject containing "|"
- * can't corrupt parsing. `execFileSync` — no shell interpolation, so a
- * crafted branch or repo path can't inject a command.
- */
 export function getRecentCommits(root: string, limit = 20): CommitSummary[] {
   const output = safeGit(root, [
     "log",

@@ -79,7 +79,7 @@ describe("generateTest", () => {
   function seedFinding() {
     writeFile(repoRoot, "src/a.ts", 'const apiKey = "sk-verysecretvalue1234";\nexport const x = 1;\n');
     const projectId = randomUUID();
-    createProject(db, projectId, "test-project", repoRoot);
+    createProject(db, projectId, "test-project", repoRoot, null);
     const findingId = randomUUID();
     replaceProjectFindings(
       db,

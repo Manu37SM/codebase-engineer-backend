@@ -1,28 +1,5 @@
 import type { DB } from "./index.js";
 
-/**
- * Persistence for `generated_test`/`generated_test_review` (Phase 19).
- * Mirrors `patch`/`patch_review`'s (Phases 17-18) two-gate state machine
- * shape, since AI test generation has the same underlying risk profile —
- * writing something to disk based on an AI response — plus one extra step
- * patch generation doesn't have: actually executing what got written, per
- * docs/AI_MODE.md §1's "reviewed & executed, not trusted on compile
- * alone":
- *
- *   pending_approval --(approve)--------> approved --(generate)--> proposed
- *                     \-(reject)--------> rejected
- *
- *   proposed --(approve-write)--> approved_for_write --(write-and-run)--> written | passed | failed_tests
- *            \-(reject-write)---> rejected
- *
- * `written` means the file was created but the suite couldn't actually be
- * run (e.g. no supported test command detected) — an honest degrade, not
- * a failure of the write itself. `passed`/`failed_tests` mean the suite
- * really ran (via the existing Phase 9 test runner) after the file was
- * written; `test_run_id` links to that real, full `test_run` row (stdout/
- * stderr/counts), so nothing about the execution is re-invented here.
- */
-
 export interface GeneratedTestRecord {
   id: string;
   project_id: string;
@@ -71,11 +48,6 @@ export interface GeneratedTestWithFindingContext extends GeneratedTestRecord {
   findingSeverity: string | null;
 }
 
-/**
- * Every generated test for a project, across all findings — mirrors
- * `patchRepo.ts`'s `listPatchesForProject`, for the same Changes-page
- * unified review queue.
- */
 export function listGeneratedTestsForProject(db: DB, projectId: string): GeneratedTestWithFindingContext[] {
   return db
     .prepare(
@@ -110,7 +82,6 @@ export function setGeneratedTestContent(
   );
 }
 
-/** Records the outcome of actually writing the file and running the suite (Phase 19's "executed" step). */
 export function setGeneratedTestRunResult(db: DB, id: string, status: string, testRunId: string | null): void {
   db.prepare("UPDATE generated_test SET status = ?, test_run_id = ? WHERE id = ?").run(status, testRunId, id);
 }

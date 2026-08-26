@@ -43,7 +43,7 @@ describe("auth/rateLimit (Task: pre-launch checklist — brute-force protection)
 
   it("a fresh window (simulated by a tiny windowMs and a real wait) allows attempts again", async () => {
     const key = "test:window-rolls-over";
-    checkRateLimit(key, 1, 50); // windowMs = 50ms, real wall-clock wait below
+    checkRateLimit(key, 1, 50); 
     expect(checkRateLimit(key, 1, 50).allowed).toBe(false);
 
     await new Promise((resolve) => setTimeout(resolve, 80));

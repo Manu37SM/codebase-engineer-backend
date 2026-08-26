@@ -16,20 +16,11 @@ export interface FixPlanOptions {
   projectRoot: string;
   finding: FindingRecord;
   files: FileForSelection[];
-  /** The row from `provider_configuration` to use — the caller (the route) is responsible for picking an enabled one. */
+
   providerConfig: ProviderConfig & { id: string; name: string };
   budgetTokens?: number;
 }
 
-/**
- * The seven required sections of an AI fix plan, per docs/AI_MODE.md §5 —
- * "every AI fix plan has exactly these seven sections, each required".
- * "Required" describes the target design's expectation of the model, not
- * a runtime guarantee this code can enforce: a provider that doesn't
- * follow the requested format still leaves the corresponding field `null`
- * rather than fabricating a section it didn't actually produce. `raw`
- * always preserves the complete response so nothing is lost either way.
- */
 export interface ParsedFixPlan {
   problem: string | null;
   rootCause: string | null;
@@ -45,30 +36,13 @@ export interface FixPlanResult {
   requestId: string;
   bundle: ContextBundle;
   plan: ParsedFixPlan;
-  /** True when a prior Phase 15 root-cause analysis for this finding was found and included as grounding — false means the plan was built from the finding and context bundle alone. */
+
   usedPriorRootCauseAnalysis: boolean;
   provider: string;
   model: string;
   usage: AICompletionResult["usage"];
 }
 
-/**
- * Phase 16's AI workflow: asks the provider for the seven-section fix
- * plan docs/AI_MODE.md §5 defines. Where Phase 14 (explanation) and
- * Phase 15 (root-cause analysis) each stood alone, this is the first
- * workflow to actively look for a *previous* workflow's output — if a
- * successful Phase 15 root-cause analysis already exists for this
- * finding, its EVIDENCE/INFERENCE/CONFIDENCE text is folded into the
- * prompt as grounding, so the plan doesn't have to re-derive a root cause
- * from scratch when one has already been worked out. Falls back to
- * planning from the finding and context bundle alone when no prior
- * analysis exists — never blocks on one, never fabricates one.
- *
- * This is still strictly read-only / advisory: nothing here writes or
- * executes anything. Patch generation (Phase 17) is a separate, later
- * workflow gated behind human approval, per docs/AI_MODE.md §4's two
- * approval checkpoints — a fix plan alone changes nothing on disk.
- */
 export async function planFix(options: FixPlanOptions): Promise<FixPlanResult> {
   const priorRootCause = getLatestSuccessfulResponse(options.db, options.finding.id, ROOT_CAUSE_ANALYSIS_OPERATION_TYPE);
 

@@ -1,14 +1,5 @@
 import { readTextFileSafe, WalkedFile } from "./fileWalker.js";
 
-/**
- * Language support, per docs/PRD.md §3 — started with Java, JavaScript,
- * TypeScript; broadened (Task #89) to cover the other languages the
- * test-runner (backend/src/testrunner/detect.ts) and the rest of the
- * product's docs already promise: Python, Ruby, Go, C#, PHP, C/C++, SQL,
- * Rust, Kotlin, Swift. Other extensions are still counted under "Other" so
- * the dashboard's file totals stay accurate, but they don't get
- * first-class per-language LOC treatment.
- */
 export const EXTENSION_LANGUAGE_MAP: Record<string, string> = {
   ".java": "Java",
   ".js": "JavaScript",
@@ -41,7 +32,6 @@ export const EXTENSION_LANGUAGE_MAP: Record<string, string> = {
   ".swift": "Swift",
 };
 
-/** Returns the detected language for a relative path, or null if unrecognized. */
 export function languageForPath(relPath: string): string | null {
   const idx = relPath.lastIndexOf(".");
   if (idx === -1) return null;
@@ -61,12 +51,6 @@ export interface LanguageDetectionResult {
   otherFiles: number;
 }
 
-/**
- * Counts files and approximate lines-of-code per detected language. LOC is
- * "approximate" deliberately: it is a newline count on files under the
- * readable-size cap, not a language-aware parse — good enough for dashboard
- * summaries, not a substitute for the Phase 6 analysis engine.
- */
 export function detectLanguages(files: WalkedFile[]): LanguageDetectionResult {
   const byLanguage = new Map<string, { fileCount: number; approxLoc: number }>();
   let otherFiles = 0;
@@ -107,6 +91,6 @@ function countLines(text: string): number {
   if (text.length === 0) return 0;
   const matches = text.match(/\n/g);
   const newlineCount = matches ? matches.length : 0;
-  // Count a trailing partial line as a line too.
+
   return text.endsWith("\n") ? newlineCount : newlineCount + 1;
 }

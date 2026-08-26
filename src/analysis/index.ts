@@ -13,7 +13,6 @@ import type { Finding } from "./types.js";
 
 export type { Finding, Severity, FindingCategory } from "./types.js";
 
-/** Every rule whose findings belong to the "security" category — used by the live GET /security view (backend/src/security/scan.ts) as well as the full pipeline below. */
 export const SECURITY_RULES = [
   secretSmellRule,
   envFileCommittedRule,
@@ -27,10 +26,7 @@ const RULES = [
   todoFixmeRule,
   missingTestsRule,
   ...SECURITY_RULES,
-  // Two new categories (documentation, dependencies) — the Findings page's
-  // category filter previously only ever had three options
-  // (maintainability/testing/security) because those were the only
-  // categories any rule could ever produce.
+
   missingReadmeRule,
   unpinnedDependencyRule,
 ];
@@ -41,11 +37,6 @@ export interface AnalysisResult {
   finishedAt: string;
 }
 
-/**
- * Runs the full deterministic rule pipeline against a project root. See
- * docs/ARCHITECTURE.md §6 — rules never fabricate evidence; a rule that
- * can't cite a concrete file/line/pattern match doesn't fire.
- */
 export function runAnalysis(root: string): AnalysisResult {
   const startedAt = new Date().toISOString();
   const ctx = buildAnalysisContext(root);

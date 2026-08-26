@@ -97,7 +97,7 @@ describe("selfReviewPatch", () => {
     writeFile(repoRoot, "src/a.ts", "export function add(a: number, b: number) { return a - b; }\n");
 
     const projectId = randomUUID();
-    createProject(db, projectId, "test-project", repoRoot);
+    createProject(db, projectId, "test-project", repoRoot, null);
 
     const findingId = randomUUID();
     replaceProjectFindings(
@@ -181,7 +181,7 @@ describe("selfReviewPatch", () => {
   it("refuses to self-review a patch with no diff yet", async () => {
     setup();
     const projectId = randomUUID();
-    createProject(db, projectId, "test-project", repoRoot);
+    createProject(db, projectId, "test-project", repoRoot, null);
     const findingId = randomUUID();
     replaceProjectFindings(
       db,
@@ -223,7 +223,7 @@ describe("selfReviewPatch", () => {
     setup();
     writeFile(repoRoot, "src/a.ts", "export const x = 1;\n");
     const projectId = randomUUID();
-    createProject(db, projectId, "test-project", repoRoot);
+    createProject(db, projectId, "test-project", repoRoot, null);
     const findingId = randomUUID();
     replaceProjectFindings(
       db,

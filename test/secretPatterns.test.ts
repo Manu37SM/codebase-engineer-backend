@@ -45,4 +45,40 @@ describe("redactSecretsInText", () => {
     expect(redactionCount).toBe(0);
     expect(text).toBe(source);
   });
+
+  // Regression coverage for a real audit finding: the original pattern set
+  // missed AWS secret access keys, JWTs, and unquoted `.env`-style
+  // KEY=value credentials — all common real-world shapes.
+  it("redacts a labeled AWS secret access key", () => {
+    const source = 'aws_secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"';
+    const { text, redactionCount } = redactSecretsInText(source);
+    expect(redactionCount).toBe(1);
+    expect(text).not.toContain("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
+    expect(text).toContain("[REDACTED:AWS secret access key]");
+  });
+
+  it("redacts a JWT wherever it appears, unlabeled", () => {
+    const source =
+      "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dQw4w9WgXcQ";
+    const { text, redactionCount } = redactSecretsInText(source);
+    expect(redactionCount).toBe(1);
+    expect(text).not.toContain("dQw4w9WgXcQ");
+    expect(text).toContain("[REDACTED:JWT]");
+  });
+
+  it("redacts an unquoted .env-style credential line", () => {
+    const source = "PASSWORD=hunter2ProdDbPass\nAPI_KEY=sk-abc123def456ghi789";
+    const { text, redactionCount } = redactSecretsInText(source);
+    expect(redactionCount).toBe(2);
+    expect(text).not.toContain("hunter2ProdDbPass");
+    expect(text).not.toContain("sk-abc123def456ghi789");
+    expect(text).toContain("[REDACTED:hardcoded credential-like value (unquoted)]");
+  });
+
+  it("does not flag a short, non-secret-looking unquoted config value", () => {
+    const source = "TOKEN_TTL_SECONDS=3600\nPASSWORD_MIN_LENGTH=8";
+    const { text, redactionCount } = redactSecretsInText(source);
+    expect(redactionCount).toBe(0);
+    expect(text).toBe(source);
+  });
 });

@@ -39,7 +39,6 @@ function startZipServer(zipBuffer: Buffer): Promise<{ url: string; close: () => 
   });
 }
 
-/** Builds a real zip archive in memory with a single top-level wrapper folder — the common GitHub "Download ZIP" shape. */
 function buildWrappedZip(): Buffer {
   const zip = new AdmZip();
   zip.addFile("my-repo-main/README.md", Buffer.from("# hello\n"));
@@ -47,7 +46,6 @@ function buildWrappedZip(): Buffer {
   return zip.toBuffer();
 }
 
-/** A zip with multiple top-level entries — should NOT be flattened. */
 function buildFlatZip(): Buffer {
   const zip = new AdmZip();
   zip.addFile("README.md", Buffer.from("# hello\n"));
@@ -72,7 +70,6 @@ describe("downloadAndExtractZip", () => {
 
     await downloadAndExtractZip(server.url, destDir);
 
-    // Flattened: README.md is directly in destDir, not under my-repo-main/.
     expect(fs.existsSync(path.join(destDir, "README.md"))).toBe(true);
     expect(fs.existsSync(path.join(destDir, "src/main.ts"))).toBe(true);
     expect(fs.existsSync(path.join(destDir, "my-repo-main"))).toBe(false);
@@ -113,10 +110,6 @@ describe("downloadAndExtractZip", () => {
     await expect(downloadAndExtractZip(server.url, destDir)).rejects.toThrow(/already exists/);
   });
 
-  // User report: pasting a Google Drive "share" link (which serves an HTML
-  // viewer page, not the file's raw bytes) into the plain "Zip download
-  // URL" field always failed with an opaque AdmZip parsing error. Caught
-  // up front now with an actionable message instead.
   it("gives a friendly, actionable error for a Google Drive share link instead of a raw zip-parse failure", async () => {
     destDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ce-zip-test-")), "extracted");
     await expect(
@@ -138,12 +131,6 @@ describe("downloadAndExtractZip", () => {
     await expect(downloadAndExtractZip(`${server.url}/viewer-page`, destDir)).rejects.toThrow(/webpage/i);
   });
 
-  // User report: a real 1drv.ms link came back as a bare 403 from
-  // Microsoft's edge — plausibly because Node's fetch sends no/minimal
-  // User-Agent by default and OneDrive's CDN blocks that as basic bot
-  // mitigation. These tests mock `fetch` directly (a real OneDrive host
-  // can't be pointed at the local test server) to lock in both the
-  // outgoing User-Agent and the automatic `download=1` retry.
   describe("OneDrive links", () => {
     const originalFetch = global.fetch;
 
@@ -179,7 +166,7 @@ describe("downloadAndExtractZip", () => {
         call++;
         const requestUrl = typeof input === "string" ? input : (input as URL).toString();
         if (call === 1) {
-          // Initial request to the shortlink comes back blocked (403).
+
           return {
             ok: false,
             status: 403,
@@ -187,7 +174,7 @@ describe("downloadAndExtractZip", () => {
             headers: new Headers(),
           };
         }
-        // Retry should target the resolved URL with download=1 appended.
+
         expect(requestUrl).toBe(`${resolvedUrl}&download=1`);
         return {
           ok: true,
@@ -217,12 +204,6 @@ describe("downloadAndExtractZip", () => {
   });
 });
 
-// Task #86: `extractZipBuffer` is the extraction/flattening core that
-// `downloadAndExtractZip` now delegates to, split out so the Google Drive
-// importer (which downloads bytes via an authenticated fetch, not a plain
-// unauthenticated `fetch(url)`) can reuse identical behavior. Covered
-// directly here — in-memory, no HTTP server needed — in addition to the
-// `downloadAndExtractZip` tests above that exercise it indirectly.
 describe("extractZipBuffer", () => {
   let tmpRoot: string | null = null;
 

@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { MAX_READABLE_FILE_BYTES } from "../discovery/fileWalker.js";
 
-/** Returns a sha256 hex digest of the file's raw bytes, or null if too large/unreadable. */
 export function computeContentHash(absPath: string, sizeBytes: number): string | null {
   if (sizeBytes > MAX_READABLE_FILE_BYTES) return null;
   try {

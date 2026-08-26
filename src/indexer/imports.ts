@@ -1,11 +1,4 @@
-/**
- * Lightweight, regex-based import extraction. This is deliberately not a
- * full AST/Tree-sitter parse (see docs/FEATURE.md — full symbol/import
- * extraction via Tree-sitter is tracked as future work, not implemented in
- * Phase 3). It only reports import specifiers it can literally see in the
- * text, so it can under-report unusual syntax but should not fabricate
- * imports that aren't there.
- */
+
 
 const JS_IMPORT_PATTERNS = [
   /import\s+(?:[\w*{}\s,]+\s+from\s+)?["']([^"']+)["']/g,
@@ -33,7 +26,7 @@ function extractWithPatterns(text: string, patterns: RegExp[]): string[] {
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(text)) !== null) {
       found.add(match[1]);
-      if (found.size > 500) break; // sanity cap — avoid pathological input
+      if (found.size > 500) break; 
     }
   }
   return Array.from(found).sort();

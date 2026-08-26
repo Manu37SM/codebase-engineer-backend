@@ -27,14 +27,11 @@ describe("resolveImports", () => {
 
     expect(edges).toHaveLength(0);
     expect(externalReferences.get("react")).toBe(1);
-    expect(externalReferences.get("./missing")).toBe(1); // unresolvable relative import — reported, not fabricated
+    expect(externalReferences.get("./missing")).toBe(1); 
   });
 
   it("resolves a NodeNext-style '.js' specifier to its actual '.ts' source file", () => {
-    // TypeScript's NodeNext module resolution requires import specifiers to
-    // use the compiled ".js" extension even though the source file is
-    // ".ts" — see backend/tsconfig.json. This is how every real import in
-    // this codebase's own backend/src is written.
+
     const files = [
       { relativePath: "src/a.ts", language: "TypeScript", imports: ["./helper.js"] },
       { relativePath: "src/helper.ts", language: "TypeScript", imports: [] },
@@ -70,7 +67,7 @@ describe("resolveImports", () => {
         specifier: "com.example.util.Helper",
       },
     ]);
-    expect(externalReferences.get("java.util.List")).toBe(1); // stdlib — external
+    expect(externalReferences.get("java.util.List")).toBe(1); 
   });
 
   it("does not resolve Java wildcard imports", () => {
@@ -113,10 +110,6 @@ describe("buildArchitectureView", () => {
     const moduleB = view.nodes.find((n) => n.id === "src/b")!;
     expect(moduleB.fileCount).toBe(1);
 
-    // src/a -> src/b (from index.ts importing ../b/thing) should appear as a
-    // module-level edge; the intra-module src/a -> src/a edges (index.ts ->
-    // helper.ts, helper.test.ts -> helper.ts) must NOT appear as edges since
-    // they're not architecturally meaningful at this aggregation level.
     expect(view.edges).toEqual([{ from: "src/a", to: "src/b", weight: 1 }]);
   });
 

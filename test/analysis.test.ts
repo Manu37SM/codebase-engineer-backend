@@ -78,7 +78,7 @@ describe("runAnalysis — large-function rule", () => {
 
     const { findings } = runAnalysis(root);
     const largeFunctionFindings = findings.filter((f) => f.ruleId === "large-function");
-    // Only the outer function is reported — its span already covers inner().
+
     expect(largeFunctionFindings).toHaveLength(1);
     expect(largeFunctionFindings[0].evidence).toContain("outer");
   });
@@ -137,10 +137,7 @@ describe("runAnalysis — missing-test-file rule", () => {
   });
 
   it("does not flag a file that's imported and exercised by a differently-named test file", () => {
-    // Real-world pattern: one topic-based test file covers several source
-    // files, rather than 1:1 file-to-test naming. A naming-only check would
-    // false-positive here — this is the exact bug caught by dogfooding
-    // this rule against this project's own backend/src.
+
     root = makeTempRepo();
     const body = Array.from({ length: 45 }, (_, i) => `export const v${i} = ${i};`).join("\n");
     writeFile(root, "src/git.ts", body);
@@ -155,10 +152,7 @@ describe("runAnalysis — missing-test-file rule", () => {
   });
 
   it("does not flag a file only reachable transitively through an orchestrator the test imports", () => {
-    // e.g. test imports `discoverRepository` from index.ts, which itself
-    // imports git.ts — git.ts is exercised, but no test file imports it by
-    // name. Requires transitive closure over the import graph, not just
-    // direct test-file imports.
+
     root = makeTempRepo();
     const body = Array.from({ length: 45 }, (_, i) => `export const v${i} = ${i};`).join("\n");
     writeFile(root, "src/leaf.ts", body);
@@ -172,32 +166,20 @@ describe("runAnalysis — missing-test-file rule", () => {
   it("does not flag small files or skip-listed basenames like index.ts", () => {
     root = makeTempRepo();
     const body = Array.from({ length: 45 }, (_, i) => `export const v${i} = ${i};`).join("\n");
-    writeFile(root, "src/index.ts", body); // skip-listed basename
-    writeFile(root, "src/tiny.ts", "export const a = 1;\n"); // under LOC floor
+    writeFile(root, "src/index.ts", body); 
+    writeFile(root, "src/tiny.ts", "export const a = 1;\n"); 
 
     const { findings } = runAnalysis(root);
     expect(findings.filter((f) => f.ruleId === "missing-test-file")).toHaveLength(0);
   });
 
   it("scales roughly linearly with repo size, not quadratically (perf regression guard)", () => {
-    // Phase 23 perf fix: the naming-convention check used to re-scan every
-    // path in the repo for every candidate source file (O(files x paths)).
-    // On a real ~3,700-file corpus that alone cost ~1.4s out of the rule's
-    // ~1.7s total (see docs/PERFORMANCE.md) — fixed by precomputing the set
-    // of "has a corresponding test by naming convention" base names once.
-    // This constructs a repo deliberately shaped to make the old O(N^2)
-    // behavior expensive (every candidate file is a genuine miss, so the
-    // old code always scanned every path to exhaustion before giving up)
-    // and asserts the rule stays fast — a generous bound that the old
-    // implementation would blow through at this file count, but that the
-    // fixed O(N) implementation clears with room to spare.
+
     root = makeTempRepo();
     const body = Array.from({ length: 45 }, (_, i) => `export const v${i} = ${i};`).join("\n");
     const FILE_COUNT = 1500;
     for (let i = 0; i < FILE_COUNT; i++) {
-      // No naming-convention match and nothing imports these — every file
-      // is a genuine "no corresponding test" case, the worst case for the
-      // old linear-scan-per-candidate implementation.
+
       writeFile(root, `src/module_${i}/unrelated_${i}.ts`, body);
     }
 
@@ -207,10 +189,7 @@ describe("runAnalysis — missing-test-file rule", () => {
     const elapsedMs = performance.now() - start;
 
     expect(findings).toHaveLength(FILE_COUNT);
-    // At 1500 files, the old O(N^2) naming-convention scan alone measured
-    // ~230ms+ on this corpus's growth curve; the fixed O(N) version
-    // measures single-digit milliseconds. 400ms leaves generous headroom
-    // for slower CI hardware while still catching a real O(N^2) regression.
+
     expect(elapsedMs).toBeLessThan(400);
   });
 });
@@ -269,7 +248,7 @@ describe("runAnalysis — env-file-committed rule", () => {
     const finding = findings.find((f) => f.ruleId === "env-file-committed");
     expect(finding).toBeTruthy();
     expect(finding!.filePath).toBe(".env");
-    // The finding must never echo the file's actual contents.
+
     expect(finding!.evidence).not.toContain("abc123");
   });
 

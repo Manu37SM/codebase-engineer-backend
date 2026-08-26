@@ -12,7 +12,6 @@ import { __resetAllRateLimitsForTests } from "../src/auth/rateLimit.js";
 
 const AUTH_ENV_KEYS = ["AUTH_TOKEN_ENCRYPTION_KEY", "TURNSTILE_SECRET_KEY"] as const;
 
-/** Extracts the session cookie's value from a `set-cookie` response header, for reuse in the next request. */
 function extractSessionCookie(setCookieHeader: string | string[] | undefined): string | null {
   if (!setCookieHeader) return null;
   const headers = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
@@ -94,11 +93,7 @@ describe("auth API", () => {
     tmpDbDir = fs.mkdtempSync(path.join(os.tmpdir(), "ce-auth-test-"));
     db = openDatabase(path.join(tmpDbDir, "test.db"));
     app = buildApp({ db });
-    // The login/register rate limiter (auth/rateLimit.ts) is a
-    // module-level in-memory counter keyed by IP — every `app.inject()`
-    // call in this file shares the same simulated IP, so without a reset
-    // between tests, this describe block's own many real login/register
-    // calls would trip the limiter partway through the suite.
+
     __resetAllRateLimitsForTests();
   });
 
@@ -108,10 +103,7 @@ describe("auth API", () => {
       else process.env[k] = v;
     }
     app.close();
-    // Close the real sqlite handle before removing its file — on Windows
-    // (unlike POSIX) an open native file handle blocks unlink/rmdir with
-    // EBUSY, so skipping this makes cleanup flaky/failing there even
-    // though app.close() alone is enough on Linux/macOS.
+
     db.close();
     fs.rmSync(tmpDbDir, { recursive: true, force: true });
   });
@@ -121,7 +113,6 @@ describe("auth API", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ authRequired: false, user: null });
 
-    // Every other route still works with no session at all — the whole point of open mode.
     const projectsRes = await app.inject({ method: "GET", url: "/api/v1/projects" });
     expect(projectsRes.statusCode).toBe(200);
   });
@@ -149,17 +140,15 @@ describe("auth API", () => {
       payload: { email: "Alice@Example.com", password: "a-real-password-123", displayName: "Alice" },
     });
     expect(registerRes.statusCode).toBe(201);
-    expect(registerRes.json().user.email).toBe("alice@example.com"); // normalized to lowercase
+    expect(registerRes.json().user.email).toBe("alice@example.com"); 
     expect(registerRes.json().user).not.toHaveProperty("password_hash");
 
     const cookie = extractSessionCookie(registerRes.headers["set-cookie"]);
     expect(cookie).toBeTruthy();
 
-    // Now that an account exists, every other route requires a session.
     const unauthedRes = await app.inject({ method: "GET", url: "/api/v1/projects" });
     expect(unauthedRes.statusCode).toBe(401);
 
-    // ...but with the session cookie, it works.
     const authedRes = await app.inject({
       method: "GET",
       url: "/api/v1/projects",
@@ -167,7 +156,6 @@ describe("auth API", () => {
     });
     expect(authedRes.statusCode).toBe(200);
 
-    // /me now reports the logged-in user.
     const meRes = await app.inject({ method: "GET", url: "/api/v1/auth/me", headers: { cookie: cookie! } });
     expect(meRes.json()).toEqual({
       authRequired: true,
@@ -216,7 +204,7 @@ describe("auth API", () => {
       payload: { email: "nobody@example.com", password: "whatever" },
     });
     expect(unknownEmailRes.statusCode).toBe(401);
-    // Same message either way — doesn't leak which emails are registered.
+
     expect(unknownEmailRes.json().error).toBe(wrongPasswordRes.json().error);
 
     const correctRes = await app.inject({
@@ -249,7 +237,7 @@ describe("auth API", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/v1/auth/register",
-      payload: { email: "dana@example.com", password: "a-real-password-123" }, // no turnstileToken
+      payload: { email: "dana@example.com", password: "a-real-password-123" }, 
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toMatch(/Bot verification failed/);
@@ -286,7 +274,7 @@ describe("auth API", () => {
       method: "POST",
       url: "/api/v1/auth/register",
       payload: { email: "henry@example.com", password: "a-real-password-123" },
-      headers: { "x-forwarded-proto": "https" }, // untrusted client-supplied header
+      headers: { "x-forwarded-proto": "https" }, 
     });
     const setCookie = String(res.headers["set-cookie"]);
     expect(setCookie).not.toMatch(/Secure/i);
@@ -338,8 +326,6 @@ describe("auth API", () => {
       payload: { email: "throttled@example.com", password: "the-real-password-123" },
     });
 
-    // The limiter allows 10 attempts per window — exhaust it with wrong
-    // passwords, each a real request through the real route.
     let lastRes;
     for (let i = 0; i < 10; i++) {
       lastRes = await app.inject({
@@ -350,8 +336,6 @@ describe("auth API", () => {
       expect(lastRes.statusCode).toBe(401);
     }
 
-    // The 11th attempt — even with the CORRECT password — is throttled,
-    // not authenticated: the limiter counts attempts, not failures.
     const throttledRes = await app.inject({
       method: "POST",
       url: "/api/v1/auth/login",
@@ -387,7 +371,6 @@ describe("auth API", () => {
       payload: { email: "recovers@example.com", password: "a-real-password-123" },
     });
 
-    // A few mistyped attempts, well under the limit...
     for (let i = 0; i < 3; i++) {
       await app.inject({
         method: "POST",
@@ -396,7 +379,6 @@ describe("auth API", () => {
       });
     }
 
-    // ...then a real successful login...
     const successRes = await app.inject({
       method: "POST",
       url: "/api/v1/auth/login",
@@ -404,15 +386,13 @@ describe("auth API", () => {
     });
     expect(successRes.statusCode).toBe(200);
 
-    // ...and the counter is back to zero, so this user has their full 10
-    // attempts available again rather than being left at "7 remaining".
     for (let i = 0; i < 10; i++) {
       const res = await app.inject({
         method: "POST",
         url: "/api/v1/auth/login",
         payload: { email: "recovers@example.com", password: "wrong-password" },
       });
-      expect(res.statusCode).toBe(401); // not 429 — the window is fresh
+      expect(res.statusCode).toBe(401); 
     }
   });
 });

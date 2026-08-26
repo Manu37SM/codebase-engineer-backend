@@ -1,14 +1,6 @@
 import { SECRET_PATTERNS, redactValue } from "../../security/secretPatterns.js";
 import type { AnalysisContext, Finding, Rule } from "../types.js";
 
-/**
- * Deterministic, pattern-based secret smell detection — per docs/SECURITY.md
- * §4, a detected secret is never stored, logged, or displayed in full.
- * Evidence always shows a redacted form. This is a first-pass heuristic
- * scanner; a more thorough dependency/config security pass is Phase 10.
- * Pattern definitions live in `security/secretPatterns.ts`, shared with the
- * Phase 13 AI context-sanitization layer so the two can't drift apart.
- */
 export const secretSmellRule: Rule = {
   id: "hardcoded-secret",
   run(ctx: AnalysisContext): Finding[] {

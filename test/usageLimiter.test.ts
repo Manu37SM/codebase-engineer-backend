@@ -31,7 +31,7 @@ describe("usageLimiter", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ce-usage-limiter-test-"));
     db = openDatabase(path.join(tmpDir, "test.db"));
     projectId = randomUUID();
-    createProject(db, projectId, "test-project", tmpDir);
+    createProject(db, projectId, "test-project", tmpDir, null);
 
     findingId = randomUUID();
     replaceProjectFindings(
@@ -139,12 +139,12 @@ describe("usageLimiter", () => {
       tier: "pro",
       dodoSubscriptionId: "sub_x",
       dodoPaymentId: "pay_x",
-      currentPeriodEnd: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), // already expired
+      currentPeriodEnd: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), 
     });
     for (let i = 0; i < 50; i++) insertAiRequest(now);
 
     const result = checkAiOperationAllowed(db);
     expect(result.tier).toBe("free");
-    expect(result.allowed).toBe(false); // expired back to free, and 50 >= free's limit of 50
+    expect(result.allowed).toBe(false); 
   });
 });

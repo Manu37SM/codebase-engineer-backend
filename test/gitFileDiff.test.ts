@@ -57,8 +57,7 @@ describe("getUncommittedDiffForFile", () => {
     initGit(root);
     writeFile(root, "weird; rm -rf .git", "content\n");
     gitCommitAll(root, "initial");
-    // No exception, and the repo's .git directory must still exist —
-    // proof the semicolon wasn't shell-interpreted as a command separator.
+
     getUncommittedDiffForFile(root, "weird; rm -rf .git");
     expect(() => execFileSync("git", ["status"], { cwd: root })).not.toThrow();
   });

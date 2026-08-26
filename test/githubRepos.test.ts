@@ -6,14 +6,6 @@ import type { FastifyInstance } from "fastify";
 import { openDatabase, DB } from "../src/db/index.js";
 import { buildApp } from "../src/app.js";
 
-// Task #84: GET /api/v1/github/repos and POST /api/v1/github/import both
-// need a real GitHub access token on file, which only exists once a user
-// has actually completed the GitHub OAuth flow (Task #83). Cloning itself
-// is mocked here (githubClone.js's `cloneWithToken`) rather than hitting
-// real github.com — that real-clone behavior is already covered end to
-// end by `importer.githubClone.test.ts` using local `file://` repos; this
-// file focuses on the route wiring: auth requirement, token lookup, input
-// validation, and project registration.
 vi.mock("../src/importer/githubClone.js", async () => {
   const actual = await vi.importActual<typeof import("../src/importer/githubClone.js")>(
     "../src/importer/githubClone.js"
@@ -80,13 +72,12 @@ describe("GitHub repo browser + clone-to-register (Task #84)", () => {
     }
     global.fetch = originalFetch;
     app.close();
-    // See auth.test.ts's afterEach for why this is required on Windows.
+
     db.close();
     fs.rmSync(tmpDbDir, { recursive: true, force: true });
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
-  /** Signs in via the real GitHub OAuth callback flow (fake fetch), returning the session cookie. */
   async function signInWithGitHub(): Promise<string> {
     global.fetch = fakeFetchResponding({
       "github.com/login/oauth/access_token": { access_token: "fake-github-access-token" },
@@ -104,15 +95,14 @@ describe("GitHub repo browser + clone-to-register (Task #84)", () => {
   }
 
   it("401s GET /github/repos with no session at all", async () => {
-    // A GitHub-connected account always means auth is required (Task #83
-    // OAuth always creates a user), so an anonymous request is unauthenticated.
-    await signInWithGitHub(); // now countUsers() > 0, so auth is enforced
+
+    await signInWithGitHub(); 
     const res = await app.inject({ method: "GET", url: "/api/v1/github/repos" });
     expect(res.statusCode).toBe(401);
   });
 
   it("400s GET /github/repos for a signed-in user who never connected GitHub", async () => {
-    // Register a plain local account (no GitHub identity).
+
     const registerRes = await app.inject({
       method: "POST",
       url: "/api/v1/auth/register",

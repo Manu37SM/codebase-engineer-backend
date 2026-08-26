@@ -1,27 +1,5 @@
 import type { DB } from "./index.js";
 
-/**
- * Persistence for `patch`/`patch_review` (Phase 0 scaffold tables, empty
- * and unused until Phase 17 — the first phase to write anything that
- * could eventually change a file on disk). The patch lifecycle this
- * module supports is a real, persisted state machine per
- * docs/ARCHITECTURE.md §3 and docs/AI_MODE.md §4's two human-approval
- * gates ("Human Approval → Patch Generation" and "Diff Review → Human
- * Approval → Apply Patch"):
- *
- *   pending_approval --(approve)-------> approved --(generate)--> proposed
- *                     \-(reject)-------> rejected
- *
- *   proposed --(approve-apply)--> approved_for_apply --(apply)--> applied
- *            \-(reject-apply)---> rejected                    \-> failed
- *
- * `failed` can be retried via /apply again without re-approving (a diff
- * that failed to apply due to e.g. drift since generation doesn't need a
- * human to re-decide whether the *change* is a good idea — only whether
- * to retry the mechanical apply step, which /apply itself gates by
- * requiring a real dry-run success before touching any file).
- */
-
 export interface PatchRecord {
   id: string;
   project_id: string;
@@ -69,15 +47,6 @@ export interface PatchWithFindingContext extends PatchRecord {
   findingSeverity: string | null;
 }
 
-/**
- * Every patch for a project, across all findings — the real query behind
- * the Changes page (a unified review queue), as opposed to
- * `listPatchesForFinding` above, which only every existed scoped to a
- * single finding (the Findings page's inline per-finding patch list).
- * Left-joins `finding` (not an inner join) since a patch's finding can in
- * principle have been deleted independently — a patch should still show
- * up for review rather than silently vanishing from the queue.
- */
 export function listPatchesForProject(db: DB, projectId: string): PatchWithFindingContext[] {
   return db
     .prepare(
@@ -101,7 +70,6 @@ export function setPatchDiff(db: DB, id: string, diffText: string, status: strin
   db.prepare("UPDATE patch SET diff_text = ?, status = ? WHERE id = ?").run(diffText, status, id);
 }
 
-/** Records the outcome of an actual apply-to-disk attempt (Phase 18). */
 export function setPatchApplyResult(
   db: DB,
   id: string,

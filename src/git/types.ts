@@ -5,7 +5,7 @@ export interface CommitSummary {
   shortHash: string;
   authorName: string;
   authorEmail: string;
-  date: string; // ISO 8601 (git --date=iso-strict)
+  date: string; 
   message: string;
 }
 
@@ -16,7 +16,7 @@ export interface FileChurn {
 
 export interface FileDiffStat {
   path: string;
-  insertions: number | null; // null for binary files (git reports "-")
+  insertions: number | null; 
   deletions: number | null;
 }
 

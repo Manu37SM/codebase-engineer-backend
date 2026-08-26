@@ -3,17 +3,6 @@ import type { FileChurn } from "./types.js";
 
 const DEFAULT_TOP_N = 15;
 
-/**
- * Counts how many commits touched each file within the last `windowDays`
- * days, as a proxy for "churn" (files that change often are more likely to
- * accumulate bugs / benefit from review attention). Returns the top N files
- * by commit count, descending.
- *
- * Uses `git log --name-only --pretty=format:` which prints one blank line
- * per commit followed by that commit's changed file paths — we count
- * non-blank lines. This intentionally counts a file once per commit that
- * touched it, not once per line changed (that's what diff stats are for).
- */
 export function getFileChurn(root: string, windowDays = 90, topN = DEFAULT_TOP_N): FileChurn[] {
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
   const output = safeGit(root, [

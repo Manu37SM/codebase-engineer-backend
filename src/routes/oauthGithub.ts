@@ -23,13 +23,7 @@ const AUTH_URL = "https://github.com/login/oauth/authorize";
 const TOKEN_URL = "https://github.com/login/oauth/access_token";
 const USER_URL = "https://api.github.com/user";
 const EMAILS_URL = "https://api.github.com/user/emails";
-// `repo` grants read/write on the user's repositories (needed to browse
-// and clone private repos for Task #84's "browse & pick from your repos"
-// flow — read-only `public_repo` alone wouldn't cover private ones, and
-// GitHub doesn't offer a narrower read-only-private-repo scope). This
-// token is only ever used to list/clone repositories on the user's own
-// behalf and is encrypted at rest (auth/crypto.ts) — never used for
-// anything beyond what the user explicitly triggers in the UI.
+
 const SCOPES = "read:user user:email repo";
 const USER_AGENT = "codebase-engineer";
 
@@ -46,16 +40,6 @@ interface GitHubEmailEntry {
   verified: boolean;
 }
 
-/**
- * GitHub sign-in + repo access scope (Task #83). Same shape as Google's
- * flow (routes/oauthGoogle.ts) — authorization-code exchange, link-by-email
- * or create a new account, shared session cookie — but additionally
- * requests the `repo` scope and stores the encrypted access token, since
- * Task #84 (GitHub repo browser + clone-to-register) needs it to call the
- * GitHub API on the user's behalf later. Nothing in this route itself
- * calls any repo-listing endpoint — it only authenticates and stores the
- * token for that later, explicit, user-triggered use.
- */
 export function registerGitHubOAuthRoutes(app: FastifyInstance, { db }: RegisterGitHubOAuthRoutesOptions): void {
   app.get("/api/v1/auth/github/start", async (request, reply) => {
     const config = getGitHubOAuthConfig();
@@ -128,9 +112,6 @@ export function registerGitHubOAuthRoutes(app: FastifyInstance, { db }: Register
       return reply.status(502).send({ error: "Could not fetch account details from GitHub." });
     }
 
-    // GitHub's /user.email is null when the address is kept private (a
-    // common default) — fall back to the verified primary email from
-    // /user/emails, which the `user:email` scope grants access to.
     let email = userInfo.email?.toLowerCase() ?? null;
     if (!email) {
       try {
@@ -143,15 +124,10 @@ export function registerGitHubOAuthRoutes(app: FastifyInstance, { db }: Register
           email = primary?.email.toLowerCase() ?? null;
         }
       } catch {
-        // Non-fatal — sign-in can still proceed with a synthesized email below.
+
       }
     }
 
-    // See the matching comment in oauthGoogle.ts's callback: previously
-    // this always ran a plain "sign in", so completing GitHub's OAuth flow
-    // while already signed in via Google (or vice versa) silently swapped
-    // the active session onto a different account. Fix: link onto the
-    // currently signed-in account when one exists, instead of switching.
     const currentUserId = resolveCurrentUserId(request, db);
 
     const providerUserId = String(userInfo.id);
@@ -160,14 +136,10 @@ export function registerGitHubOAuthRoutes(app: FastifyInstance, { db }: Register
 
     if (identity) {
       userId = identity.user_id;
-      // GitHub OAuth App tokens don't expire/rotate by default, so there's
-      // no refresh_token to update here — just the (possibly regenerated)
-      // access token.
+
       updateOauthTokens(db, identity.id, encryptToken(tokenBody.access_token), null);
     } else if (currentUserId) {
-      // Already signed in and this GitHub account isn't linked to anyone
-      // yet — attach it (and its repo-browsing token) to the *current*
-      // account rather than matching by email or creating a separate one.
+
       userId = currentUserId;
       createOauthIdentity(db, randomUUID(), {
         userId,
@@ -199,9 +171,6 @@ export function registerGitHubOAuthRoutes(app: FastifyInstance, { db }: Register
       });
     }
 
-    // Only mint/overwrite the session cookie when the account we ended up
-    // on differs from (or there wasn't) an existing session — see the
-    // matching comment in oauthGoogle.ts's callback.
     if (userId !== currentUserId) {
       const sessionToken = createSession(db, randomUUID(), userId);
       setSessionCookie(request, reply, sessionToken);

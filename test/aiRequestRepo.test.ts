@@ -28,7 +28,7 @@ describe("aiRequestRepo", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ce-ai-request-test-"));
     db = openDatabase(path.join(tmpDir, "test.db"));
     projectId = randomUUID();
-    createProject(db, projectId, "test-project", "/tmp/test-project-" + randomUUID());
+    createProject(db, projectId, "test-project", "/tmp/test-project-" + randomUUID(), null);
 
     findingId = randomUUID();
     replaceProjectFindings(
@@ -185,7 +185,6 @@ describe("aiRequestRepo", () => {
     const stored = getLatestSuccessfulResponseForTestRun(db, run.id, "failure-diagnosis");
     expect(stored?.content).toContain("something broke");
 
-    // A finding-keyed lookup with the same operation_type must not see this row.
     expect(getLatestSuccessfulResponse(db, findingId, "failure-diagnosis")).toBeUndefined();
   });
 

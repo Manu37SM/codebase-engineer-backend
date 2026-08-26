@@ -8,16 +8,8 @@ export interface ProviderConfig {
   apiKey: string | null;
 }
 
-/** Adapter kinds this product can actually instantiate right now. Kept in sync with `createProvider`'s switch. */
 export const SUPPORTED_PROVIDER_KINDS = ["openai-compatible"] as const;
 
-/**
- * Builds a concrete `AIProvider` from a stored `provider_configuration` row.
- * Only `openai-compatible` is implemented so far — `anthropic-compatible`
- * and `ollama` are named in docs/AI_MODE.md's target design but have no
- * adapter yet; this throws a clear, honest error for them rather than
- * silently falling back to a different adapter or faking one.
- */
 export function createProvider(config: ProviderConfig): AIProvider {
   if (!config.baseUrl) {
     throw new Error("Provider configuration is missing a base URL");

@@ -9,24 +9,12 @@ export interface TestCommandDetection {
   framework: TestFramework | null;
   command: string | null;
   args: string[];
-  /** Why detection failed — set only when `supported` is false. */
+
   reason?: string;
 }
 
 const DEFAULT_NPM_PLACEHOLDER = 'echo "Error: no test specified" && exit 1';
 
-/**
- * Picks a concrete, runnable test command for a project, matching the build
- * systems this product actually supports running (per
- * `discovery/buildSystem.ts`): Maven and the npm family (npm/pnpm/yarn).
- * Gradle is detected elsewhere for reporting purposes but intentionally not
- * run here — see the "Gradle-detected-only" note in buildSystem.ts and the
- * corresponding FEATURE.md gap.
- *
- * Never guesses at a command that isn't actually present — an npm project
- * with no `scripts.test` (or only the default CRA/npm-init placeholder) is
- * reported as unsupported with a reason, not silently skipped or fabricated.
- */
 export function detectTestCommand(root: string): TestCommandDetection {
   if (fs.existsSync(path.join(root, "pom.xml"))) {
     return {
@@ -64,13 +52,11 @@ export function detectTestCommand(root: string): TestCommandDetection {
     }
 
     const hasVitest = Boolean(pkg.dependencies?.vitest || pkg.devDependencies?.vitest);
-    // Node's own built-in test runner (`node --test`) needs no declared
-    // dependency — it ships with Node itself — so it can only be detected
-    // from the test script's own invocation, unlike vitest above.
+
     const usesNodeTestRunner = /\bnode\b[^&|;]*--test\b/.test(testScript);
     const managers = detectPackageManagers(root);
     const manager = managers[0] ?? "npm";
-    const command = manager; // "npm" | "pnpm" | "yarn" are all valid executables
+    const command = manager; 
     const args = manager === "yarn" ? ["test"] : ["run", "test"];
 
     return {
@@ -125,7 +111,6 @@ export function detectTestCommand(root: string): TestCommandDetection {
   };
 }
 
-/** Non-recursive: only checks files directly in `root`, matching how a `.sln`/`.csproj` normally sits at a .NET project's root. */
 function findFileWithExtension(root: string, extensions: string[]): boolean {
   let entries: string[];
   try {
@@ -144,15 +129,6 @@ function safeReadIncludes(filePath: string, needle: string): boolean {
   }
 }
 
-/**
- * Python has no single canonical "this is a pytest project" file the way
- * Maven has `pom.xml` — pytest is detected from any of the conventional
- * signals: a dedicated config file/section, a `conftest.py` fixture file,
- * or pytest listed as a dependency. Deliberately does NOT trigger on a
- * bare `setup.py`/`.py` file alone — that would misclassify any Python
- * project as pytest-testable even with no tests or a different test
- * framework (unittest, nose, etc.) in use.
- */
 function detectsPytest(root: string): boolean {
   if (fs.existsSync(path.join(root, "pytest.ini"))) return true;
   if (fs.existsSync(path.join(root, "conftest.py"))) return true;

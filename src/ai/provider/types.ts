@@ -1,10 +1,6 @@
-/**
- * The provider-agnostic interface every AI adapter implements. Business
- * logic (future `backend/src/ai/workflows/`, Phase 13+) depends only on
- * this interface, never on a concrete vendor SDK — see docs/AI_MODE.md §2.
- */
+
 export interface AIProvider {
-  readonly id: string; // e.g. "openai-compatible"
+  readonly id: string; 
   readonly displayName: string;
   listModels(): Promise<AIModelInfo[]>;
   complete(request: AICompletionRequest): Promise<AICompletionResult>;
@@ -42,12 +38,11 @@ export type AIProviderStatusKind = "reachable" | "auth_error" | "rate_limited" |
 
 export interface AIProviderStatus {
   status: AIProviderStatusKind;
-  /** Human-readable detail — e.g. the HTTP status text, or a network error message. Never includes the API key. */
+
   detail: string | null;
   checkedAt: string;
 }
 
-/** Thrown by an adapter when a request to the provider fails, carrying enough detail to classify the failure without re-parsing HTTP internals at the call site. */
 export class AIProviderError extends Error {
   constructor(
     message: string,

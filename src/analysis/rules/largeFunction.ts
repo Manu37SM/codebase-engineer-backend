@@ -2,25 +2,10 @@ import type { AnalysisContext, Finding, Rule } from "../types.js";
 
 const LINE_THRESHOLD = 60;
 
-// Matches a line that looks like the opening of a function/method body:
-// `function foo(...) {`, `public void bar(...) {`, `methodName(...): T {`.
 const FUNCTION_SIGNATURE = /^\s*(?:export\s+|public\s+|private\s+|protected\s+|static\s+|async\s+|default\s+)*(?:function\s+)?([A-Za-z_$][A-Za-z0-9_$]*)\s*\([^;{}]*\)\s*(?::\s*[A-Za-z0-9_$<>[\],\s|.]+)?\s*\{\s*$/;
 
-// Matches an arrow function with a block body assigned to a name:
-// `const foo = (...) => {` / `export const foo = async (...) => {`.
 const ARROW_SIGNATURE = /^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:async\s+)?\([^;{}]*\)\s*(?::\s*[^={}]+)?=>\s*\{\s*$/;
 
-/**
- * Flags function/method bodies whose line span crosses a fixed threshold,
- * using a brace-balance scan rather than a real parser. This is a
- * deliberate, documented approximation (see docs/FEATURE.md): it can miss
- * unusual formatting and doesn't account for braces inside strings/comments,
- * but every finding it does produce cites a real signature line and a real
- * measured span — nothing is invented.
- *
- * Applies only to JavaScript/TypeScript/Java, where this pattern is common;
- * skipped entirely for other languages rather than guessing.
- */
 export const largeFunctionRule: Rule = {
   id: "large-function",
   run(ctx: AnalysisContext): Finding[] {
@@ -52,7 +37,7 @@ function scanFile(relativePath: string, text: string): Finding[] {
     const endIndex = findMatchingBraceEnd(lines, i);
     if (endIndex === null) {
       i++;
-      continue; // unbalanced — don't guess, just move on
+      continue; 
     }
 
     const spanLines = endIndex - i + 1;
@@ -71,20 +56,12 @@ function scanFile(relativePath: string, text: string): Finding[] {
       });
     }
 
-    // Skip past this function's body so nested inner functions aren't
-    // reported separately from the outer one that already covers them.
     i = endIndex + 1;
   }
 
   return findings;
 }
 
-/**
- * Given the index of a line ending in an opening brace, scans forward
- * tracking brace depth to find the line where it returns to zero. Returns
- * null if the braces never balance before EOF (approximation limitation —
- * e.g. a brace inside a string threw off the count).
- */
 function findMatchingBraceEnd(lines: string[], startIndex: number): number | null {
   let depth = 0;
   for (let i = startIndex; i < lines.length; i++) {
@@ -93,7 +70,7 @@ function findMatchingBraceEnd(lines: string[], startIndex: number): number | nul
       else if (ch === "}") depth--;
     }
     if (depth === 0 && i > startIndex) return i;
-    if (depth === 0 && i === startIndex) return i; // single-line body (rare given the regex requires trailing '{')
+    if (depth === 0 && i === startIndex) return i; 
   }
   return null;
 }

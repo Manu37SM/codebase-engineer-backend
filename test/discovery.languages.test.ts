@@ -54,7 +54,7 @@ describe("detectLanguages (Task #89)", () => {
       expect(go?.fileCount).toBe(1);
       expect(swift?.fileCount).toBe(1);
       expect(sql?.fileCount).toBe(1);
-      expect(result.otherFiles).toBe(1); // README.md
+      expect(result.otherFiles).toBe(1); 
     } finally {
       cleanupRepo(root);
     }

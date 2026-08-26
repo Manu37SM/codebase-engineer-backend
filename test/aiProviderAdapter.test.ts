@@ -4,14 +4,6 @@ import type { AddressInfo } from "node:net";
 import { createOpenAICompatibleProvider } from "../src/ai/provider/adapters/openaiCompatible.js";
 import { AIProviderError } from "../src/ai/provider/types.js";
 
-/**
- * These tests run the adapter's real fetch/parsing code against a real
- * local HTTP server speaking the OpenAI-compatible protocol shape — not a
- * mocked `fetch`. There's no live OpenAI-compatible SaaS this sandbox can
- * reach (and shouldn't call one in a test suite anyway), so a local double
- * that implements the real wire protocol is the closest honest equivalent
- * to what Phase 9's real-subprocess tests did for the test runner.
- */
 function startServer(handler: http.RequestListener): Promise<{ url: string; close: () => Promise<void> }> {
   return new Promise((resolve) => {
     const server = http.createServer(handler);
@@ -101,7 +93,7 @@ describe("createOpenAICompatibleProvider — against a real local server", () =>
   });
 
   it("classifies a genuinely unreachable server as unreachable", async () => {
-    // Nothing listens on this port — a real connection failure, not a mock.
+
     const provider = createOpenAICompatibleProvider({ baseUrl: "http://127.0.0.1:1", model: "gpt-test", timeoutMs: 2000 });
     await expect(provider.listModels()).rejects.toMatchObject({ kind: "unreachable" });
   });

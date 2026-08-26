@@ -1,12 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 
-/**
- * Heuristic framework detection. Deterministic and evidence-based: a
- * framework is only reported when a concrete dependency entry or manifest
- * pattern is found — never guessed. Initial coverage targets the JS/TS and
- * Java ecosystems named in docs/PRD.md §3.
- */
 const NPM_DEPENDENCY_FRAMEWORK_MAP: Record<string, string> = {
   react: "React",
   "react-dom": "React",
@@ -35,7 +29,7 @@ export function detectFrameworksFromPackageJson(root: string): string[] {
   try {
     pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
   } catch {
-    return []; // malformed package.json — don't fabricate a finding
+    return []; 
   }
 
   const allDeps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };

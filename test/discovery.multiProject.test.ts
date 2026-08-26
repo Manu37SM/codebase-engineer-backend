@@ -35,7 +35,7 @@ describe("detectSubProjects (Task #87)", () => {
     root = makeTempRepo();
     writeFile(root, "package.json", "{}");
     writeFile(root, "node_modules/some-dep/package.json", "{}");
-    writeFile(root, ".git/hooks/package.json", "{}"); // pathological, but should never be scanned
+    writeFile(root, ".git/hooks/package.json", "{}"); 
 
     const result = detectSubProjects(root);
     expect(result.isMultiProject).toBe(false);
@@ -44,12 +44,12 @@ describe("detectSubProjects (Task #87)", () => {
 
   it("reports both a root marker and a nested marker as multi-project", () => {
     root = makeTempRepo();
-    writeFile(root, "package.json", "{}"); // root is a project (e.g. a monorepo workspace root)
+    writeFile(root, "package.json", "{}"); 
     writeFile(root, "packages/lib-a/package.json", "{}");
 
     const result = detectSubProjects(root);
     expect(result.isMultiProject).toBe(true);
-    expect(result.candidates[0]).toEqual({ relativePath: "", markers: ["package.json"] }); // root sorted first
+    expect(result.candidates[0]).toEqual({ relativePath: "", markers: ["package.json"] }); 
     expect(result.candidates.some((c) => c.relativePath === "packages/lib-a")).toBe(true);
   });
 

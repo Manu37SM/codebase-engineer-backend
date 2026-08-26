@@ -1,13 +1,3 @@
--- Migration 010: AI self-review (Phase 21)
---
--- Same story as migration 009's test_run_id: docs/AI_MODE.md §6 defines a
--- self-review workflow whose target is a `patch` (its diff), not a
--- `Finding` and not a `TestRun` — a patch can have several proposed
--- diffs over its lifetime (each `/generate` retry writes a new
--- diff_text), so scoping self-review's accounting/storage by
--- ai_request.finding_id (like Phase 14) would blur together reviews of
--- different diffs for the same finding. A dedicated, nullable
--- ai_request.patch_id keeps each self-review tied to the exact diff it
--- reviewed. Purely additive — every prior ai_request row simply gets
--- patch_id = NULL.
+
+
 ALTER TABLE ai_request ADD COLUMN patch_id TEXT REFERENCES patch(id) ON DELETE CASCADE;

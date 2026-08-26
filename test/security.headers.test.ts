@@ -6,12 +6,6 @@ import type { FastifyInstance } from "fastify";
 import { openDatabase, DB } from "../src/db/index.js";
 import { buildApp } from "../src/app.js";
 
-// Pre-launch checklist item: "add security headers" / "add HSTS" — this
-// app previously sent none at all (no CSP, no X-Frame-Options, no
-// X-Content-Type-Options, no HSTS). Verifies the real onSend hook
-// (security/headers.ts) against real app.inject() responses, including
-// on an error response (401) to confirm it's not accidentally scoped to
-// only the happy path.
 describe("security response headers", () => {
   let tmpDbDir: string;
   let db: DB;
@@ -42,8 +36,7 @@ describe("security response headers", () => {
 
   it("still sets security headers on an error (401) response", async () => {
     setup();
-    // Register a user so auth is actually required, then hit a guarded
-    // route with no session cookie.
+
     await app.inject({
       method: "POST",
       url: "/api/v1/auth/register",

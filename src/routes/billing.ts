@@ -17,25 +17,6 @@ interface RegisterBillingRoutesOptions {
   db: DB;
 }
 
-/**
- * Optional monetization architecture (docs/MONETIZATION.md,
- * docs/ROADMAP.md Phase 26), now backed by Dodo Payments rather than
- * Razorpay — see `billing/config.ts`'s doc comment for why. Every route
- * here degrades to an honest "billing not configured" response when
- * `DODO_*` env vars aren't set (the default, out-of-the-box state) —
- * never a 500, never a silently-fabricated "unlimited" or "no
- * subscription" shape that looks like a real answer but isn't.
- *
- * Unlike the original Razorpay integration (a hand-rolled one-time-order
- * + fixed 30-day period, explicitly scoped that way because real
- * Razorpay Subscriptions was a materially larger integration), this uses
- * Dodo's native Subscription product type: `subscription.active` /
- * `subscription.renewed` activate/extend the period using Dodo's own
- * `next_billing_date` when the webhook payload includes it (falling back
- * to a `PRO_PERIOD_DAYS` computed date only if it doesn't), and
- * `subscription.cancelled` deactivates immediately. `PRO_PERIOD_DAYS`
- * therefore only matters as a fallback, not the primary period source.
- */
 const PRO_PERIOD_DAYS = 30;
 
 interface DodoWebhookEnvelope {
@@ -84,10 +65,6 @@ export function registerBillingRoutes(app: FastifyInstance, { db }: RegisterBill
       baseUrl: billingConfig.apiBaseUrl,
     });
 
-    // returnUrl may be a relative path (the default, "/settings") — Dodo's
-    // API needs an absolute URL, so resolve it against this same request's
-    // own origin rather than requiring an operator to hardcode the full
-    // public URL as a separate env var.
     const origin = `${request.protocol}://${request.headers.host}`;
     const returnUrl = billingConfig.returnUrl.startsWith("http")
       ? billingConfig.returnUrl
@@ -111,15 +88,6 @@ export function registerBillingRoutes(app: FastifyInstance, { db }: RegisterBill
     }
   });
 
-  /**
-   * Dodo Payments webhook receiver. Registered inside its own
-   * encapsulated plugin context so only this one route gets a
-   * raw-buffer content-type parser override — every other route in the
-   * app keeps Fastify's normal JSON body parsing untouched. The raw
-   * bytes are required because `verifyDodoWebhookSignature` must check
-   * the signature against the exact bytes Dodo signed, before any JSON
-   * parsing/reserialization could alter them.
-   */
   app.register(async (webhookScope) => {
     webhookScope.addContentTypeParser(
       "application/json",
@@ -158,10 +126,6 @@ export function registerBillingRoutes(app: FastifyInstance, { db }: RegisterBill
       const dodoEventId = webhookId ?? randomUUID();
       const isNew = recordWebhookEventIfNew(db, randomUUID(), dodoEventId, event.type ?? "unknown", rawBody.toString("utf-8"));
 
-      // A redelivery of an already-processed event is still a valid,
-      // successfully-handled webhook from Dodo's perspective — ack with
-      // 200 rather than reprocessing (and never re-activating/re-
-      // deactivating from a stale event), so Dodo stops retrying it.
       if (!isNew) {
         return reply.status(200).send({ received: true, duplicate: true });
       }

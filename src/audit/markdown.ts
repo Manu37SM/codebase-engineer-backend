@@ -1,12 +1,5 @@
 import type { AuditReport } from "./types.js";
 
-/**
- * Renders an `AuditReport` as a standalone Markdown document — the
- * exportable form of the same data the Audit page shows. Evidence strings
- * are included as-is: every rule that produces a Finding is required to
- * redact secrets before the finding ever reaches this layer (see
- * `docs/SECURITY.md`), so nothing here re-checks or re-redacts.
- */
 export function buildAuditMarkdown(report: AuditReport): string {
   const lines: string[] = [];
   const push = (s = "") => lines.push(s);

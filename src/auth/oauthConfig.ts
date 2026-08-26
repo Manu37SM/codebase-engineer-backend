@@ -1,13 +1,4 @@
-/**
- * Reads Google/GitHub OAuth app credentials from the environment (Task
- * #82/#83). Each provider is entirely optional and independent — e.g. you
- * can configure GitHub without Google. `null` (not throwing) when a
- * provider isn't (fully) configured, so the `/start` route for that
- * provider can return a clear "not configured" response instead of the
- * server crashing on startup — same "additive, never a hard requirement"
- * shape as Dodo Payments billing (`billing/config.ts`) and Turnstile
- * (`auth/turnstile.ts`).
- */
+
 
 export interface OAuthProviderConfig {
   clientId: string;
