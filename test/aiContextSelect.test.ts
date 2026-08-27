@@ -54,10 +54,6 @@ describe("selectContextForFinding", () => {
     expect(bundle.selected.find((s) => s.path === "src/caller.ts")!.reason).toMatch(/known caller/);
   });
 
-  // Regression coverage for a real audit finding: a circular import (B
-  // both imports and is imported by A) used to land in both the
-  // "imported" and "caller" candidate lists, getting included and
-  // token-counted twice.
   it("includes a circularly-importing file only once, not twice", () => {
     root = makeTempRepo();
     writeFile(root, "src/a.ts", "import { b } from './b.js';\nexport function a() { return b(); }\n");
@@ -73,8 +69,7 @@ describe("selectContextForFinding", () => {
 
     const bMatches = bundle.selected.filter((s) => s.path === "src/b.ts");
     expect(bMatches).toHaveLength(1);
-    // First-come wins: b.ts is discovered as an import of a.ts before it's
-    // discovered as a caller of a.ts, so that's the reason that survives.
+
     expect(bMatches[0].reason).toMatch(/Imported by/);
   });
 

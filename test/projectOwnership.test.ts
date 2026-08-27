@@ -7,15 +7,6 @@ import { openDatabase, DB } from "../src/db/index.js";
 import { buildApp } from "../src/app.js";
 import { __resetAllRateLimitsForTests } from "../src/auth/rateLimit.js";
 
-// Regression coverage for a real audit finding: before migration 018,
-// `project` had no owner column and no route checked one — once a second
-// account existed on a shared instance, any authenticated user could read,
-// modify, or trigger AI-Mode disk writes/executions against any other
-// user's project by guessing/enumerating its id. Fixed via
-// `getProjectForOwner`/scoped `listProjects` (`db/projectRepo.ts`), used at
-// every `:id`-taking route in `routes/projects.ts` (and the GitHub/Google
-// Drive import routes' `createProject` calls).
-
 const AUTH_ENV_KEYS = ["AUTH_TOKEN_ENCRYPTION_KEY", "TURNSTILE_SECRET_KEY"] as const;
 
 function extractSessionCookie(setCookieHeader: string | string[] | undefined): string {
@@ -131,7 +122,6 @@ describe("project ownership isolation (migration 018)", () => {
     });
     expect(bobSettingsRes.statusCode).toBe(404);
 
-    // Alice's project is still there, untouched.
     const stillThereRes = await app.inject({
       method: "GET",
       url: `/api/v1/projects/${projectId}`,

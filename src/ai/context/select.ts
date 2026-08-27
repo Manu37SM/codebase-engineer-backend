@@ -49,13 +49,6 @@ export function selectContextForFinding(options: SelectContextOptions): ContextB
   const importedPaths = edges.filter((e) => e.fromPath === finding.filePath).map((e) => e.toPath);
   const callerPaths = edges.filter((e) => e.toPath === finding.filePath).map((e) => e.fromPath);
 
-  // Dedupes across ALL of the pushes below, not just within one list —
-  // without this, a circular import (the finding's file and another file
-  // importing each other) lands in both `importedPaths` and
-  // `callerPaths`/`nonTestCallerPaths`, and would otherwise be added as
-  // two separate candidates: double-counted against the token budget and,
-  // with `includeContent: true`, sent to the AI provider twice. First
-  // push for a given path wins; later duplicates are silently skipped.
   const seenCandidatePaths = new Set<string>();
   function pushCandidateOnce(candidate: Candidate): void {
     if (seenCandidatePaths.has(candidate.path)) return;

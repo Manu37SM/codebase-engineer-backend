@@ -10,12 +10,7 @@ export interface ProjectRecord {
   created_at: string;
 
   apply_mode: ApplyMode;
-  /**
-   * Owning account's user id (migration 018), or null for a project
-   * created before multi-account auth existed and never claimed by a
-   * user, or on an instance where auth has never been enabled (no
-   * accounts registered — see auth/guard.ts's countUsers()===0 bypass).
-   */
+
   user_id: string | null;
 }
 
@@ -50,26 +45,6 @@ export function getProjectById(db: DB, id: string): ProjectRecord | undefined {
     | undefined;
 }
 
-/**
- * Ownership-checked project lookup — use this (not the raw `getProjectById`)
- * at every route that takes a `:id`/`:projectId` param, so one account can
- * never read, modify, or trigger AI-Mode disk writes/executions against
- * another account's project. `ownerUserId` should be `request.user?.id`.
- *
- * `undefined` means auth is disabled instance-wide (no accounts registered
- * — see auth/guard.ts's countUsers()===0 bypass): every project is
- * reachable, matching this product's original single-user/local-first
- * behavior. Once auth is enabled, a project is only reachable by the
- * account that owns it — including a project with a null `user_id`
- * (created before ownership existed and never backfilled/claimed), which
- * is denied rather than treated as "anyone's", failing closed.
- *
- * Returns `undefined` (indistinguishable from "doesn't exist") on a
- * mismatch, not a 403 — so a route's existing `if (!project) return 404`
- * check doubles as the ownership check with no other change needed, and a
- * caller can't use the response to tell "not yours" apart from "doesn't
- * exist" and go id-guessing.
- */
 export function getProjectForOwner(
   db: DB,
   id: string,
@@ -88,12 +63,6 @@ export function getProjectByRootPath(db: DB, rootPath: string): ProjectRecord | 
     | undefined;
 }
 
-/**
- * `ownerUserId === undefined` (auth disabled instance-wide) lists every
- * project, matching this product's original single-user behavior.
- * Otherwise scoped strictly to that account's own projects — a project
- * with a null `user_id` is excluded here too (see `getProjectForOwner`).
- */
 export function listProjects(db: DB, ownerUserId: string | undefined): ProjectRecord[] {
   if (ownerUserId === undefined) {
     return db.prepare("SELECT * FROM project ORDER BY created_at DESC").all() as ProjectRecord[];

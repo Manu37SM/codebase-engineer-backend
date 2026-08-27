@@ -18,36 +18,27 @@ export const SECRET_PATTERNS: SecretPattern[] = [
     severity: "critical",
   },
   {
-    // AWS secret access keys are an unlabeled 40-char base64-ish string,
-    // so on their own they're indistinguishable from any other base64
-    // blob — only flagged when a nearby "secret"/"aws" keyword labels it,
-    // same conservative labeled-value approach as the generic credential
-    // pattern below.
+
     pattern: /aws_?secret_?access_?key\s*[:=]\s*["']?([A-Za-z0-9/+=]{40})["']?/i,
     label: "AWS secret access key",
     severity: "critical",
     secretGroup: 1,
   },
   {
-    // JWTs are self-labeling: the base64url header segment for a JWT
-    // always starts "eyJ" (base64 of `{"`), followed by ".<payload>.<sig>".
+
     pattern: /eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/,
     label: "JWT",
     severity: "high",
   },
   {
-    // Quoted form, e.g. `apiKey = "sk-..."` in source.
+
     pattern: /(api[_-]?key|secret|password|token)\s*[:=]\s*["']([A-Za-z0-9\-_/+=]{12,})["']/i,
     label: "hardcoded credential-like value",
     severity: "high",
     secretGroup: 2,
   },
   {
-    // Unquoted `.env`-style form, e.g. `API_KEY=sk-abc123...` or
-    // `PASSWORD=hunter2ProdDbPass` — the original quoted-only pattern
-    // above misses this common shape entirely. A slightly higher length
-    // floor (16 vs. 12) than the quoted form keeps this from tripping on
-    // short config values like `TOKEN_TTL_SECONDS=3600`.
+
     pattern: /(api[_-]?key|secret|password|token|access[_-]?key)\s*=\s*([A-Za-z0-9\-_/+.]{16,})(?=\s|$)/im,
     label: "hardcoded credential-like value (unquoted)",
     severity: "high",

@@ -46,9 +46,6 @@ describe("redactSecretsInText", () => {
     expect(text).toBe(source);
   });
 
-  // Regression coverage for a real audit finding: the original pattern set
-  // missed AWS secret access keys, JWTs, and unquoted `.env`-style
-  // KEY=value credentials — all common real-world shapes.
   it("redacts a labeled AWS secret access key", () => {
     const source = 'aws_secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"';
     const { text, redactionCount } = redactSecretsInText(source);
