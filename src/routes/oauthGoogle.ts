@@ -38,7 +38,7 @@ export function registerGoogleOAuthRoutes(app: FastifyInstance, { db }: Register
     if (!config) {
       return reply
         .status(404)
-        .send({ error: "Google sign-in is not configured on this server. See backend/.env.example / docs/AUTH.md." });
+        .send({ error: "Google sign-in is not configured on this server. See backend/.env.example." });
     }
 
     const state = beginOAuthState(request, reply, "google");

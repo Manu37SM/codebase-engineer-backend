@@ -18,7 +18,7 @@ async function main() {
     console.log(
       config.staticDir
         ? `Serving built frontend from ${config.staticDir}`
-        : "No built frontend found — serving API only (see docs/PACKAGING.md to build and serve the UI from this process)."
+        : "No built frontend found — serving API only (run `npm run build` in ../frontend, then here, to serve the UI from this process)."
     );
   } catch (err) {
 

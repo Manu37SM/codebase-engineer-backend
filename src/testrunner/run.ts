@@ -118,7 +118,7 @@ export function runTests(
       stderr +=
         `\n[codebase-engineer] Could not start the test command "${[detection.command, ...detection.args].join(" ")}": ${err.message}\n` +
         `This almost always means the "${detection.command}" runtime isn't installed in this container image. ` +
-        `See docs/DEPLOYMENT.md for which frameworks are supported out of the box and how to extend the image for others.`;
+        `See deploy/Dockerfile for which test frameworks the image ships with, and extend it for others.`;
       finish(null);
     });
     child.on("close", (code) => finish(code));

@@ -46,7 +46,7 @@ export function registerGitHubOAuthRoutes(app: FastifyInstance, { db }: Register
     if (!config) {
       return reply
         .status(404)
-        .send({ error: "GitHub sign-in is not configured on this server. See backend/.env.example / docs/AUTH.md." });
+        .send({ error: "GitHub sign-in is not configured on this server. See backend/.env.example." });
     }
 
     const state = beginOAuthState(request, reply, "github");

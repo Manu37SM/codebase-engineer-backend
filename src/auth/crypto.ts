@@ -8,7 +8,7 @@ function deriveKey(): Buffer {
   if (!secret || secret.trim().length === 0) {
     throw new Error(
       "AUTH_TOKEN_ENCRYPTION_KEY is not set — required to store an OAuth token securely. " +
-        "Set it before enabling Google/GitHub OAuth (see backend/.env.example and docs/AUTH.md)."
+        "Set it before enabling Google/GitHub OAuth (see backend/.env.example)."
     );
   }
 

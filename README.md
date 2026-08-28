@@ -9,9 +9,7 @@ opt-in Razorpay billing/usage-limiting module.
 
 This folder is its own git repository, separate from the project root and
 from `../frontend/` — see the root [`README.md`](../README.md#version-control-layout)
-for why. For product scope, architecture, security model, and full feature
-status, see the docs in [`../docs/`](../docs/); this file only covers
-working inside this folder.
+for why. This file only covers working inside this folder.
 
 ## Requirements
 
@@ -39,8 +37,7 @@ npm run typecheck        # tsc --noEmit, no build output
 ```
 
 `npm run build` also copies `../frontend/dist` into `dist/public` if the
-frontend has already been built (see `scripts/copy-frontend.mjs` and
-[`../docs/PACKAGING.md`](../docs/PACKAGING.md)) — when present, the
+frontend has already been built (see `scripts/copy-frontend.mjs`) — when present, the
 compiled backend serves the built frontend itself on the same port
 (`npm start`), rather than requiring a separate frontend dev server.
 
@@ -80,13 +77,12 @@ Real integration-style tests throughout — real SQLite databases in temp
 directories, real `app.inject()` HTTP requests against the real Fastify
 app, real local HTTP servers standing in for AI providers/Razorpay rather
 than mocked `fetch`, and real subprocess execution for the test runner
-(`src/testrunner/`). See [`../docs/TESTING.md`](../docs/TESTING.md) for
-the full testing strategy and conventions.
+(`src/testrunner/`).
 
 **Windows note:** the test runner's real-process-execution tests
 (`test/testrunner.test.ts`) spawn and kill real child processes and have
 needed two rounds of Windows-specific fixes (see `src/testrunner/run.ts`'s
-doc comments and `../docs/CHANGELOG.md`) — if you hit a hang or a stale
+doc comments) — if you hit a hang or a stale
 temp-directory cleanup error on Windows that isn't covered by those notes,
 that's genuinely new information worth capturing there.
 
@@ -97,4 +93,4 @@ Every route resolves filesystem access only through a project's
 content sent to an AI provider is redacted for secrets first
 (`src/security/secretPatterns.ts`); nothing AI-generated executes or
 writes to disk without an explicit, server-side-enforced human-approval
-gate. See [`../docs/SECURITY.md`](../docs/SECURITY.md) for the full model.
+gate.
