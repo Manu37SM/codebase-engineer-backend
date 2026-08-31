@@ -21,7 +21,7 @@
     "cross-spawn": "^7.0.6",
     "dotenv": "^17.4.2",
     "fastify": "^5.12.1",
-    "ignore": "^5.3.2"
+    "ignore": "^7.0.6"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.8",
