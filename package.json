@@ -24,7 +24,7 @@
     "ignore": "^7.0.12"
   },
   "devDependencies": {
-    "@types/adm-zip": "^0.5.8",
+    "@types/adm-zip": "^0.6.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/cross-spawn": "^6.0.6",
     "@types/node": "^26.6.4",
