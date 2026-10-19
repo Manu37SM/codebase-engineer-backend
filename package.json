@@ -20,7 +20,7 @@
     "better-sqlite3": "^13.0.3",
     "cross-spawn": "^7.0.6",
     "dotenv": "^18.0.5",
-    "fastify": "^5.12.5",
+    "fastify": "^5.12.7",
     "ignore": "^7.0.12"
   },
   "devDependencies": {
