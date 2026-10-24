@@ -71,7 +71,9 @@ export function parseNodeTestOutput(rawOutput: string): TestCounts {
 }
 
 function matchTapCount(output: string, label: string): number | null {
-  const match = output.match(new RegExp(`^#\\s*${label}\\s+(\\d+)\\s*$`, "m"));
+  // TAP summary lines start with "#"; Node 26+ prints the "spec" reporter by
+  // default when stdout isn't a TTY, whose summary lines start with "ℹ".
+  const match = output.match(new RegExp(`^(?:#|ℹ)\\s*${label}\\s+(\\d+)\\s*$`, "m"));
   return match ? Number(match[1]) : null;
 }
 

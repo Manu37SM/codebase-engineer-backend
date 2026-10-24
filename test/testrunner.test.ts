@@ -270,6 +270,24 @@ describe("parseNodeTestOutput", () => {
     expect(parseNodeTestOutput(output)).toEqual({ passed: 2, failed: 1, skipped: 0 });
   });
 
+  it("parses the spec-reporter summary that Node 26+ prints by default (captured from a real run)", () => {
+    const output = [
+      "\u2714 passes (1.39ms)",
+      "\u2714 also passes (0.25ms)",
+      "\u2716 fails (10.36ms)",
+      "\u2139 tests 3",
+      "\u2139 suites 0",
+      "\u2139 pass 2",
+      "\u2139 fail 1",
+      "\u2139 cancelled 0",
+      "\u2139 skipped 0",
+      "\u2139 todo 0",
+      "\u2139 duration_ms 98.75",
+      "",
+    ].join("\n");
+    expect(parseNodeTestOutput(output)).toEqual({ passed: 2, failed: 1, skipped: 0 });
+  });
+
   it("counts cancelled tests as failed", () => {
     const output = ["# pass 4", "# fail 0", "# cancelled 1", "# skipped 0"].join("\n");
     expect(parseNodeTestOutput(output)).toEqual({ passed: 4, failed: 1, skipped: 0 });
